@@ -32,10 +32,17 @@ function getDateNDaysAgo(n: number): string {
 
 // ==================== Vercel KV 实现 ====================
 
+const KV_MODULE = '@vercel/kv'
+
+async function loadKvModule(): Promise<any> {
+  const moduleName = KV_MODULE
+  return await import(/* @vite-ignore */ moduleName)
+}
+
 async function kvGetStats(): Promise<{ daily: Record<string, number>; total: number }> {
   try {
-    const { kv } = await import('@vercel/kv')
-    const [dailyStr, totalStr] = await kv.mget(STATS_KEY, TOTAL_KEY) as [string | null, string | null]
+    const mod = await loadKvModule()
+    const [dailyStr, totalStr] = await mod.kv.mget(STATS_KEY, TOTAL_KEY) as [string | null, string | null]
     const daily = dailyStr ? JSON.parse(dailyStr) : {}
     const total = totalStr ? parseInt(totalStr, 10) || 0 : 0
     return { daily, total }
@@ -51,9 +58,9 @@ async function kvGetStats(): Promise<{ daily: Record<string, number>; total: num
 
 async function kvSetStats(daily: Record<string, number>, total: number): Promise<void> {
   try {
-    const { kv } = await import('@vercel/kv')
-    await kv.set(STATS_KEY, JSON.stringify(daily))
-    await kv.set(TOTAL_KEY, String(total))
+    const mod = await loadKvModule()
+    await mod.kv.set(STATS_KEY, JSON.stringify(daily))
+    await mod.kv.set(TOTAL_KEY, String(total))
   } catch (err: unknown) {
     const errStr = String(err)
     if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {

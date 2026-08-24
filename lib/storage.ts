@@ -68,12 +68,20 @@ export async function deleteFile(fileName: string): Promise<void> {
 }
 
 // ==================== Vercel Blob 实现 ====================
-// 仅在 Vercel 环境下动态导入，本地开发时不会加载
+// 用变量存储模块名，防止 Vercel 构建时静态分析尝试解析
+
+const BLOB_MODULE = '@vercel/blob'
+
+async function loadBlobModule(): Promise<any> {
+  // 用变量拼接，防止 Vercel 构建工具静态分析
+  const moduleName = BLOB_MODULE
+  return await import(/* @vite-ignore */ moduleName)
+}
 
 async function readFromBlob<T>(fileName: string): Promise<T | null> {
   try {
-    const { get } = await import('@vercel/blob')
-    const blob = await get(fileName)
+    const mod = await loadBlobModule()
+    const blob = await mod.get(fileName)
     if (!blob) {
       log.info('Vercel Blob：文件不存在', { fileName })
       return null
@@ -86,7 +94,6 @@ async function readFromBlob<T>(fileName: string): Promise<T | null> {
       log.info('Vercel Blob：文件不存在', { fileName })
       return null
     }
-    // @vercel/blob 未安装（本地开发），回退到本地存储
     if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {
       log.warn('@vercel/blob 未安装，回退到本地存储', { fileName })
       return readFromLocalFallback<T>(fileName)
@@ -98,9 +105,9 @@ async function readFromBlob<T>(fileName: string): Promise<T | null> {
 
 async function writeToBlob(fileName: string, data: unknown): Promise<void> {
   try {
-    const { put } = await import('@vercel/blob')
+    const mod = await loadBlobModule()
     const json = JSON.stringify(data, null, 2)
-    await put(fileName, json, { contentType: 'application/json' })
+    await mod.put(fileName, json, { contentType: 'application/json' })
     log.debug('Vercel Blob：写入成功', { fileName, size: json.length })
   } catch (err: unknown) {
     const errStr = String(err)
@@ -116,8 +123,8 @@ async function writeToBlob(fileName: string, data: unknown): Promise<void> {
 
 async function deleteFromBlob(fileName: string): Promise<void> {
   try {
-    const { del } = await import('@vercel/blob')
-    await del(fileName)
+    const mod = await loadBlobModule()
+    await mod.del(fileName)
     log.debug('Vercel Blob：删除成功', { fileName })
   } catch {
     // 忽略删除错误
