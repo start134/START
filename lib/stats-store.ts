@@ -137,7 +137,7 @@ export async function pruneOldData(olderThanDays: number = 90): Promise<number> 
     .prepare('DELETE FROM daily_stats WHERE date < ?')
     .run(cutoffDate)
 
-  const pruned = result.changes ?? 0
+  const pruned = Number(result.changes ?? 0)
   if (pruned > 0) {
     log.info('清理过期统计数据', {
       cutoffDate,

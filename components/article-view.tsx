@@ -12,6 +12,7 @@ import {
   type TocHeading,
 } from '@/components/content-with-toc'
 import { ReadingProgress } from '@/components/reading-progress'
+import { CommentList } from '@/components/comment-list'
 import { deletePost, incrementView, type Post } from '@/lib/posts'
 
 const VIEW_DEDUP_MS = 5 * 60 * 1000 // 5 分钟内重复进入不重复计数
@@ -178,6 +179,11 @@ export function ArticleView({
           )}
 
           <ContentWithToc content={post.content} onHeadingsChange={onHeadingsChange} className="mt-10" />
+
+          {/* 评论区 */}
+          <div className="mt-16">
+            <CommentList postSlug={post.slug} />
+          </div>
 
           <div className="mt-16 flex flex-wrap items-center gap-4 border-t border-border pt-8">
             {authed && (

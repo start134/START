@@ -4,12 +4,13 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useAuth } from '@/components/use-auth'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 
 const navItems = [
   { href: '/admin', label: '仪表盘', icon: '📊' },
   { href: '/admin/articles', label: '文章管理', icon: '📝' },
   { href: '/admin/new', label: '写文章', icon: '✍️' },
+  { href: '/admin/notifications', label: '通知', icon: '🔔' },
 ]
 
 export function AdminNav() {
@@ -18,6 +19,26 @@ export function AdminNav() {
   const { authed, loading, logout } = useAuth()
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const [logoutLoading, setLogoutLoading] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  const fetchUnreadCount = useCallback(async () => {
+    if (!authed) return
+    try {
+      const res = await fetch('/api/notifications', { cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        setUnreadCount(data.unreadCount || 0)
+      }
+    } catch {
+      // 忽略错误
+    }
+  }, [authed])
+
+  useEffect(() => {
+    fetchUnreadCount()
+    const interval = setInterval(fetchUnreadCount, 30000)
+    return () => clearInterval(interval)
+  }, [fetchUnreadCount])
 
   // 未登录则跳转登录页（但要等待加载完成，避免初始状态误判）
   useEffect(() => {
@@ -77,6 +98,11 @@ export function AdminNav() {
             >
               <span className="text-lg">{item.icon}</span>
               {item.label}
+              {item.href === '/admin/notifications' && unreadCount > 0 && (
+                <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
+                  {unreadCount}
+                </span>
+              )}
             </Link>
           ))}
         </nav>
@@ -86,6 +112,12 @@ export function AdminNav() {
             <p className="mb-1 font-medium text-foreground">管理员</p>
             <p>你好，START</p>
           </div>
+          <Link
+            href="/"
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:border-primary hover:text-primary mb-2"
+          >
+            返回首页
+          </Link>
           <button
             onClick={onLogoutClick}
             className="flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:border-destructive hover:text-destructive"
