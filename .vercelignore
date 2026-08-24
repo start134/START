@@ -1,0 +1,15 @@
+node_modules
+.next
+.vercel
+.git
+.github
+*.log
+.env.local
+.env.*.local
+data/stats.db
+data/stats.db-*
+data/stats.json.bak
+scripts
+.trae
+.vscode
+.DS_Store
