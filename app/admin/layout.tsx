@@ -1,7 +1,6 @@
 'use client'
 
 import { AdminNav } from '@/components/admin-nav'
-import { SiteNav } from '@/components/site-nav'
 import { useAuth } from '@/components/use-auth'
 import { usePathname } from 'next/navigation'
 
@@ -32,7 +31,6 @@ export default function AdminLayout({
     <div className="flex min-h-screen bg-background">
       {authed && <AdminNav />}
       <main className={`flex-1 ${authed ? 'ml-64' : ''}`}>
-        <SiteNav />
         <div className="min-h-screen p-8">
           {children}
         </div>
