@@ -68,19 +68,26 @@ export async function deleteFile(fileName: string): Promise<void> {
 }
 
 // ==================== Vercel Blob 实现 ====================
-// 用变量存储模块名，防止 Vercel 构建时静态分析尝试解析
+// 使用 require() 动态加载，防止 Turbopack/Webpack 构建时静态分析
 
 const BLOB_MODULE = '@vercel/blob'
 
-async function loadBlobModule(): Promise<any> {
-  // 用变量拼接，防止 Vercel 构建工具静态分析
-  const moduleName = BLOB_MODULE
-  return await import(/* @vite-ignore */ moduleName)
+function loadBlobModule(): any | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+    return require(BLOB_MODULE)
+  } catch {
+    return null
+  }
 }
 
 async function readFromBlob<T>(fileName: string): Promise<T | null> {
   try {
-    const mod = await loadBlobModule()
+    const mod = loadBlobModule()
+    if (!mod) {
+      log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
+      return readFromLocalFallback<T>(fileName)
+    }
     const blob = await mod.get(fileName)
     if (!blob) {
       log.info('Vercel Blob：文件不存在', { fileName })
@@ -94,36 +101,33 @@ async function readFromBlob<T>(fileName: string): Promise<T | null> {
       log.info('Vercel Blob：文件不存在', { fileName })
       return null
     }
-    if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {
-      log.warn('@vercel/blob 未安装，回退到本地存储', { fileName })
-      return readFromLocalFallback<T>(fileName)
-    }
-    log.error('Vercel Blob：读取失败', { fileName, error: errStr })
-    throw err
+    log.warn('Vercel Blob：读取失败，回退到本地存储', { fileName, error: errStr })
+    return readFromLocalFallback<T>(fileName)
   }
 }
 
 async function writeToBlob(fileName: string, data: unknown): Promise<void> {
   try {
-    const mod = await loadBlobModule()
+    const mod = loadBlobModule()
+    if (!mod) {
+      log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
+      await writeToLocalFallback(fileName, data)
+      return
+    }
     const json = JSON.stringify(data, null, 2)
     await mod.put(fileName, json, { contentType: 'application/json' })
     log.debug('Vercel Blob：写入成功', { fileName, size: json.length })
   } catch (err: unknown) {
     const errStr = String(err)
-    if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {
-      log.warn('@vercel/blob 未安装，回退到本地存储', { fileName })
-      await writeToLocalFallback(fileName, data)
-      return
-    }
-    log.error('Vercel Blob：写入失败', { fileName, error: errStr })
-    throw err
+    log.warn('Vercel Blob：写入失败，回退到本地存储', { fileName, error: errStr })
+    await writeToLocalFallback(fileName, data)
   }
 }
 
 async function deleteFromBlob(fileName: string): Promise<void> {
   try {
-    const mod = await loadBlobModule()
+    const mod = loadBlobModule()
+    if (!mod) return
     await mod.del(fileName)
     log.debug('Vercel Blob：删除成功', { fileName })
   } catch {

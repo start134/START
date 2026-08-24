@@ -86,11 +86,16 @@ const seedPosts: Post[] = [
 async function ensureFile(): Promise<void> {
   const backend = process.env.VERCEL ? 'vercel' : 'local'
   if (backend === 'vercel') {
-    // Vercel 环境：首次运行时将种子数据写入 Blob
-    const existing = await readJSON<Post[]>(BLOB_FILE)
-    if (!existing || existing.length === 0) {
-      log.info('Vercel Blob：写入种子数据', { seedCount: seedPosts.length })
-      await writeJSON(BLOB_FILE, seedPosts)
+    // Vercel 环境：尝试从 Blob 读取，失败则回退到种子数据
+    try {
+      const existing = await readJSON<Post[]>(BLOB_FILE)
+      if (!existing || existing.length === 0) {
+        log.info('Vercel Blob：写入种子数据', { seedCount: seedPosts.length })
+        await writeJSON(BLOB_FILE, seedPosts)
+      }
+    } catch (err) {
+      // 构建时 Blob 可能不可用，静默跳过
+      log.warn('Vercel Blob：ensureFile 失败，将使用种子数据', { error: String(err) })
     }
     return
   }
@@ -115,22 +120,28 @@ export async function readAllPosts(): Promise<Post[]> {
   try {
     let parsed: Post[]
     if (backend === 'vercel') {
-      const data = await readJSON<Post[]>(BLOB_FILE)
-      parsed = data ?? []
+      try {
+        const data = await readJSON<Post[]>(BLOB_FILE)
+        parsed = data ?? []
+      } catch (blobErr) {
+        // Blob 不可用时回退到种子数据（构建时可能发生）
+        log.warn('Vercel Blob：读取失败，使用种子数据', { error: String(blobErr) })
+        parsed = seedPosts
+      }
     } else {
       const raw = await fs.readFile(DATA_FILE, 'utf-8')
       parsed = JSON.parse(raw) as Post[]
     }
     if (!Array.isArray(parsed)) {
-      log.warn('数据文件内容不是数组，返回空列表')
-      return []
+      log.warn('数据文件内容不是数组，返回种子数据')
+      return sortByDateDesc(seedPosts)
     }
     const sorted = sortByDateDesc(parsed)
     log.info('读取全部文章成功', { count: sorted.length, backend })
     return sorted
   } catch (err) {
-    log.error('读取全部文章失败', { error: String(err) })
-    return []
+    log.error('读取全部文章失败，返回种子数据', { error: String(err) })
+    return sortByDateDesc(seedPosts)
   }
 }
 

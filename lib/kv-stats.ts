@@ -34,41 +34,47 @@ function getDateNDaysAgo(n: number): string {
 
 const KV_MODULE = '@vercel/kv'
 
-async function loadKvModule(): Promise<any> {
-  const moduleName = KV_MODULE
-  return await import(/* @vite-ignore */ moduleName)
+function loadKvModule(): any | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+    return require(KV_MODULE)
+  } catch {
+    return null
+  }
 }
 
 async function kvGetStats(): Promise<{ daily: Record<string, number>; total: number }> {
   try {
-    const mod = await loadKvModule()
+    const mod = loadKvModule()
+    if (!mod) {
+      log.warn('@vercel/kv 模块不可用，回退到本地存储')
+      return loadLocalStats()
+    }
     const [dailyStr, totalStr] = await mod.kv.mget(STATS_KEY, TOTAL_KEY) as [string | null, string | null]
     const daily = dailyStr ? JSON.parse(dailyStr) : {}
     const total = totalStr ? parseInt(totalStr, 10) || 0 : 0
     return { daily, total }
   } catch (err: unknown) {
     const errStr = String(err)
-    if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {
-      log.warn('@vercel/kv 未安装，回退到本地存储')
-      return loadLocalStats()
-    }
-    throw err
+    log.warn('Vercel KV：读取失败，回退到本地存储', { error: errStr })
+    return loadLocalStats()
   }
 }
 
 async function kvSetStats(daily: Record<string, number>, total: number): Promise<void> {
   try {
-    const mod = await loadKvModule()
+    const mod = loadKvModule()
+    if (!mod) {
+      log.warn('@vercel/kv 模块不可用，回退到本地存储')
+      saveLocalStats({ daily, total })
+      return
+    }
     await mod.kv.set(STATS_KEY, JSON.stringify(daily))
     await mod.kv.set(TOTAL_KEY, String(total))
   } catch (err: unknown) {
     const errStr = String(err)
-    if (errStr.includes('Cannot find module') || errStr.includes('module not found')) {
-      log.warn('@vercel/kv 未安装，回退到本地存储')
-      saveLocalStats({ daily, total })
-      return
-    }
-    throw err
+    log.warn('Vercel KV：写入失败，回退到本地存储', { error: errStr })
+    saveLocalStats({ daily, total })
   }
 }
 
