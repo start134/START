@@ -109,13 +109,20 @@ async function ensureFile(): Promise<void> {
     return
   }
 
+  // 本地模式：检查 data/posts.json，不存在则创建种子数据
+  // 注意：构建时（phase-production-build）文件系统可能只读，写文件失败时直接跳过
   try {
     await fs.access(DATA_FILE)
   } catch {
-    log.info('数据文件不存在，写入种子数据', { file: DATA_FILE, seedCount: seedPosts.length })
-    await fs.mkdir(DATA_DIR, { recursive: true })
-    await fs.writeFile(DATA_FILE, JSON.stringify(seedPosts, null, 2), 'utf-8')
-    log.info('种子数据写入完成')
+    try {
+      log.info('数据文件不存在，尝试写入种子数据', { file: DATA_FILE, seedCount: seedPosts.length })
+      await fs.mkdir(DATA_DIR, { recursive: true })
+      await fs.writeFile(DATA_FILE, JSON.stringify(seedPosts, null, 2), 'utf-8')
+      log.info('种子数据写入完成')
+    } catch (writeErr) {
+      // 构建时 Vercel 文件系统只读，写入失败不致命，readAllPosts 会回退到种子数据
+      log.warn('种子数据写入失败（可能是只读文件系统），将在读取时回退到内置种子', { error: String(writeErr) })
+    }
   }
 }
 
@@ -133,13 +140,18 @@ export async function readAllPosts(): Promise<Post[]> {
         const data = await readJSON<Post[]>(BLOB_FILE)
         parsed = data ?? []
       } catch (blobErr) {
-        // Blob 不可用时回退到种子数据（构建时可能发生）
         log.warn('Vercel Blob：读取失败，使用种子数据', { error: String(blobErr) })
         parsed = seedPosts
       }
     } else {
-      const raw = await fs.readFile(DATA_FILE, 'utf-8')
-      parsed = JSON.parse(raw) as Post[]
+      try {
+        const raw = await fs.readFile(DATA_FILE, 'utf-8')
+        parsed = JSON.parse(raw) as Post[]
+      } catch {
+        // 构建时文件可能不存在或文件系统只读，回退到种子数据
+        log.warn('本地数据文件读取失败，使用种子数据', { file: DATA_FILE })
+        parsed = seedPosts
+      }
     }
     if (!Array.isArray(parsed)) {
       log.warn('数据文件内容不是数组，返回种子数据')

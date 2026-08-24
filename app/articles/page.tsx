@@ -8,6 +8,8 @@ import { useAuth } from '@/components/use-auth'
 import { useToast, type ToastVariant } from '@/components/toast'
 import { deletePost, fetchPosts, type Post } from '@/lib/posts'
 
+export const dynamic = 'force-dynamic'
+
 export default function ArticlesPage() {
   const router = useRouter()
   const sp = useSearchParams()
