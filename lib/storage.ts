@@ -6,10 +6,13 @@ const log = createLogger('storage')
 
 export type StorageBackend = 'local' | 'vercel'
 
+// 构建阶段（phase-production-build）强制用本地，运行时才用 Vercel
+function isBuildPhase(): boolean {
+  return process.env.NEXT_PHASE === 'phase-production-build'
+}
+
 function getBackend(): StorageBackend {
-  // 构建时强制用本地，运行时才用 Vercel
-  // NEXT_PHASE 在 Next.js 构建期间为 'build'，运行时为 'runtime'
-  if (process.env.NEXT_PHASE === 'build') return 'local'
+  if (isBuildPhase()) return 'local'
   return process.env.VERCEL ? 'vercel' : 'local'
 }
 
@@ -21,7 +24,6 @@ export async function readJSON<T>(fileName: string): Promise<T | null> {
     return readFromBlob<T>(fileName)
   }
 
-  // 本地：直接读文件
   const filePath = path.join(process.cwd(), 'data', fileName)
   try {
     const raw = await fs.readFile(filePath, 'utf-8')
@@ -44,7 +46,6 @@ export async function writeJSON(fileName: string, data: unknown): Promise<void> 
     return
   }
 
-  // 本地：直接写文件
   const dataDir = path.join(process.cwd(), 'data')
   await fs.mkdir(dataDir, { recursive: true })
   const filePath = path.join(dataDir, fileName)
@@ -70,78 +71,67 @@ export async function deleteFile(fileName: string): Promise<void> {
   }
 }
 
-// ==================== Vercel Blob 实现 ====================
-// 仅在运行时且检测到 Vercel 环境时才加载
+// ==================== Vercel Blob REST API 实现 ====================
+// 不用 @vercel/blob SDK，直接用 fetch 调 REST API，彻底避开构建工具分析
 
-// 延迟加载：只在需要时才导入模块
-type BlobModule = { get: (key: string) => Promise<{ text: () => Promise<string> } | null>; put: (key: string, body: string, opts?: { contentType?: string }) => Promise<unknown>; del: (key: string) => Promise<unknown> }
-
-let blobModulePromise: Promise<BlobModule | null> | null = null
-
-async function loadBlobModule(): Promise<BlobModule | null> {
-  if (blobModulePromise) return blobModulePromise
-  blobModulePromise = (async () => {
-    try {
-      // 用变量存储模块路径，防止静态分析
-      const modPath = '@vercel/blob'
-      const mod = await import(/* @__PURE__ */ modPath)
-      return mod as BlobModule
-    } catch (e) {
-      log.warn('加载 @vercel/blob 失败：', String(e))
-      return null
-    }
-  })()
-  return blobModulePromise
+function getBlobBaseUrl(): string | null {
+  const url = process.env.BLOB_STORE_URL
+  if (!url) return null
+  return url.replace(/\/$/, '')
 }
 
 async function readFromBlob<T>(fileName: string): Promise<T | null> {
   try {
-    const mod = await loadBlobModule()
-    if (!mod) {
-      log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
+    const baseUrl = getBlobBaseUrl()
+    if (!baseUrl) {
+      log.warn('BLOB_STORE_URL 未配置，回退到本地存储', { fileName })
       return readFromLocalFallback<T>(fileName)
     }
-    const blob = await mod.get(fileName)
-    if (!blob) {
+    const res = await fetch(`${baseUrl}/${fileName}`, { cache: 'no-store' })
+    if (res.status === 404) {
       log.info('Vercel Blob：文件不存在', { fileName })
       return null
     }
-    const text = await blob.text()
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    const text = await res.text()
     return JSON.parse(text) as T
   } catch (err: unknown) {
-    const errStr = String(err)
-    if (errStr.includes('ENOENT') || errStr.includes('not found')) {
-      log.info('Vercel Blob：文件不存在', { fileName })
-      return null
-    }
-    log.warn('Vercel Blob：读取失败，回退到本地存储', { fileName, error: errStr })
+    log.warn('Vercel Blob：读取失败，回退到本地存储', { fileName, error: String(err) })
     return readFromLocalFallback<T>(fileName)
   }
 }
 
 async function writeToBlob(fileName: string, data: unknown): Promise<void> {
   try {
-    const mod = await loadBlobModule()
-    if (!mod) {
-      log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
+    const baseUrl = getBlobBaseUrl()
+    if (!baseUrl) {
+      log.warn('BLOB_STORE_URL 未配置，回退到本地存储', { fileName })
       await writeToLocalFallback(fileName, data)
       return
     }
     const json = JSON.stringify(data, null, 2)
-    await mod.put(fileName, json, { contentType: 'application/json' })
+    const res = await fetch(`${baseUrl}/${fileName}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: json,
+    })
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
     log.debug('Vercel Blob：写入成功', { fileName, size: json.length })
   } catch (err: unknown) {
-    const errStr = String(err)
-    log.warn('Vercel Blob：写入失败，回退到本地存储', { fileName, error: errStr })
+    log.warn('Vercel Blob：写入失败，回退到本地存储', { fileName, error: String(err) })
     await writeToLocalFallback(fileName, data)
   }
 }
 
 async function deleteFromBlob(fileName: string): Promise<void> {
   try {
-    const mod = await loadBlobModule()
-    if (!mod) return
-    await mod.del(fileName)
+    const baseUrl = getBlobBaseUrl()
+    if (!baseUrl) return
+    await fetch(`${baseUrl}/${fileName}`, { method: 'DELETE' })
     log.debug('Vercel Blob：删除成功', { fileName })
   } catch {
     // 忽略删除错误

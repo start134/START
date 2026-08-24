@@ -13,6 +13,8 @@ import {
   parseLocalDate,
 } from '@/lib/site'
 
+export const dynamic = 'force-dynamic'
+
 const log = createLogger('article-page')
 
 // 详情页（Server Component）：

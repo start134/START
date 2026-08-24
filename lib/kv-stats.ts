@@ -8,10 +8,14 @@ const STATS_KEY = 'daily_stats'
 const TOTAL_KEY = 'total_views'
 const LOCAL_FILE = path.join(process.cwd(), 'data', 'stats.json')
 
+// 构建阶段强制用本地
+function isBuildPhase(): boolean {
+  return process.env.NEXT_PHASE === 'phase-production-build'
+}
+
 function isVercel(): boolean {
-  // 构建时强制用本地，运行时才用 Vercel KV
-  if (process.env.NEXT_PHASE === 'build') return false
-  return process.env.VERCEL === '1' || !!process.env.KV_REST_API_URL
+  if (isBuildPhase()) return false
+  return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 }
 
 /** 获取今日日期字符串 YYYY.MM.DD */
@@ -32,51 +36,66 @@ function getDateNDaysAgo(n: number): string {
   return `${y}.${m}.${day}`
 }
 
-// ==================== Vercel KV 实现 ====================
-// 使用 eval('require') 彻底绕过 Turbopack/Webpack 静态分析
+// ==================== Vercel KV REST API 实现 ====================
+// 不用 @vercel/kv SDK，直接用 fetch 调 REST API
 
-function loadKvModule(): any | null {
+function getKvUrl(key: string): string {
+  const base = process.env.KV_REST_API_URL!
+  return `${base}/${encodeURIComponent(key)}`
+}
+
+function getKvHeaders(): HeadersInit {
+  const token = process.env.KV_REST_API_TOKEN!
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  }
+}
+
+async function kvGet(key: string): Promise<string | null> {
   try {
-    const req = eval('require') as NodeRequire
-    return req('@vercel/kv')
-  } catch {
+    const res = await fetch(getKvUrl(key), {
+      headers: getKvHeaders(),
+      cache: 'no-store',
+    })
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as { value?: string }
+    return data.value ?? null
+  } catch (err: unknown) {
+    log.warn('Vercel KV GET 失败', { key, error: String(err) })
     return null
   }
 }
 
-async function kvGetStats(): Promise<{ daily: Record<string, number>; total: number }> {
+async function kvSet(key: string, value: string): Promise<void> {
   try {
-    const mod = loadKvModule()
-    if (!mod) {
-      log.warn('@vercel/kv 模块不可用，回退到本地存储')
-      return loadLocalStats()
-    }
-    const [dailyStr, totalStr] = await mod.kv.mget(STATS_KEY, TOTAL_KEY) as [string | null, string | null]
-    const daily = dailyStr ? JSON.parse(dailyStr) : {}
-    const total = totalStr ? parseInt(totalStr, 10) || 0 : 0
-    return { daily, total }
+    const res = await fetch(getKvUrl(key), {
+      method: 'PUT',
+      headers: getKvHeaders(),
+      body: JSON.stringify({ value }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
   } catch (err: unknown) {
-    const errStr = String(err)
-    log.warn('Vercel KV：读取失败，回退到本地存储', { error: errStr })
-    return loadLocalStats()
+    log.warn('Vercel KV SET 失败', { key, error: String(err) })
   }
 }
 
+async function kvGetStats(): Promise<{ daily: Record<string, number>; total: number }> {
+  const [dailyStr, totalStr] = await Promise.all([
+    kvGet(STATS_KEY),
+    kvGet(TOTAL_KEY),
+  ])
+  const daily = dailyStr ? JSON.parse(dailyStr) : {}
+  const total = totalStr ? parseInt(totalStr, 10) || 0 : 0
+  return { daily, total }
+}
+
 async function kvSetStats(daily: Record<string, number>, total: number): Promise<void> {
-  try {
-    const mod = loadKvModule()
-    if (!mod) {
-      log.warn('@vercel/kv 模块不可用，回退到本地存储')
-      saveLocalStats({ daily, total })
-      return
-    }
-    await mod.kv.set(STATS_KEY, JSON.stringify(daily))
-    await mod.kv.set(TOTAL_KEY, String(total))
-  } catch (err: unknown) {
-    const errStr = String(err)
-    log.warn('Vercel KV：写入失败，回退到本地存储', { error: errStr })
-    saveLocalStats({ daily, total })
-  }
+  await Promise.all([
+    kvSet(STATS_KEY, JSON.stringify(daily)),
+    kvSet(TOTAL_KEY, String(total)),
+  ])
 }
 
 // ==================== 本地文件回退 ====================

@@ -27,7 +27,7 @@ const DATA_FILE = path.join(DATA_DIR, 'posts.json')
 const BLOB_FILE = 'posts.json'
 
 function isBuildTime(): boolean {
-  return process.env.NEXT_PHASE === 'build'
+  return process.env.NEXT_PHASE === 'phase-production-build'
 }
 
 function getStorageBackend(): 'local' | 'vercel' {
@@ -281,9 +281,7 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
     })
     // 同步更新每日统计
     try {
-      // 用 eval 包裹防止静态分析
-      const dynamicImport = eval('import') as (path: string) => Promise<{ incrementTodayViews: () => Promise<void> }>
-      const { incrementTodayViews } = await dynamicImport('@/lib/kv-stats')
+      const { incrementTodayViews } = await import('@/lib/kv-stats')
       await incrementTodayViews()
       log.debug('每日统计同步完成', { slug, date: today() })
     } catch (statsErr) {
