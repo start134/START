@@ -16,6 +16,7 @@ export function CommentForm({ postSlug, parentId, onSuccess, onCancel }: Comment
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -26,6 +27,7 @@ export function CommentForm({ postSlug, parentId, onSuccess, onCancel }: Comment
 
     setLoading(true)
     setError('')
+    setSuccess('')
 
     try {
       const input: CommentInput = {
@@ -42,14 +44,16 @@ export function CommentForm({ postSlug, parentId, onSuccess, onCancel }: Comment
         body: JSON.stringify(input),
       })
 
+      const data = await res.json().catch(() => null)
+
       if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || '评论失败')
+        throw new Error(data?.error || '评论失败')
       }
 
       setName('')
       setEmail('')
       setContent('')
+      setSuccess('评论已提交，审核通过后将会显示。')
       onSuccess()
     } catch (err) {
       setError(err instanceof Error ? err.message : '评论失败，请重试')
@@ -103,6 +107,9 @@ export function CommentForm({ postSlug, parentId, onSuccess, onCancel }: Comment
       </div>
       {error && (
         <p className="text-sm text-destructive">{error}</p>
+      )}
+      {success && (
+        <p className="text-sm text-green-500">{success}</p>
       )}
       <div className="flex items-center gap-3">
         <button

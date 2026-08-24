@@ -45,17 +45,21 @@ export async function POST(request: NextRequest) {
       content,
     })
 
-    // 创建通知
-    const type = parentId ? 'reply' : 'comment'
-    const title = parentId ? '收到新回复' : '收到新评论'
-    const contentPreview = content.length > 50 ? content.slice(0, 50) + '...' : content
-    await createNotification({
-      type,
-      title,
-      content: `${name || '匿名'}: ${contentPreview}`,
-      commentId: comment.id,
-      postSlug,
-    })
+    // 通知失败不阻塞评论创建
+    try {
+      const type = parentId ? 'reply' : 'comment'
+      const title = parentId ? '收到新回复' : '收到新评论'
+      const contentPreview = content.length > 50 ? content.slice(0, 50) + '...' : content
+      await createNotification({
+        type,
+        title,
+        content: `${name || '匿名'}: ${contentPreview}`,
+        commentId: comment.id,
+        postSlug,
+      })
+    } catch (notifErr) {
+      log.warn('通知创建失败（不影响评论）', { error: String(notifErr) })
+    }
 
     log.info('评论创建成功', { id: comment.id, postSlug })
     return NextResponse.json(comment, { status: 201 })
