@@ -39,6 +39,7 @@ ehthumbs.db
 Desktop.ini
 
 # Local data（开发环境数据，生产由 Vercel Blob/KV 管理）
+data/posts.json
 data/stats.db
 data/stats.db-*
 data/stats.json
