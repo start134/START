@@ -1,4 +1,4 @@
-// 客户端文章 API：通过 fetch 调用服务端 Route，数据真正持久化（跨浏览器/刷新可见）
+﻿// 客户端文章 API：通过 fetch 调用服务端 Route，数据真正持久化（跨浏览器/刷新可见）
 import type { Post } from '@/lib/posts-store'
 
 export type { Post }
@@ -55,9 +55,13 @@ export async function updatePost(
 }
 
 export async function deletePost(slug: string): Promise<void> {
-  await fetch(`/api/posts/${encodeURIComponent(slug)}`, {
+  const res = await fetch(`/api/posts/${encodeURIComponent(slug)}`, {
     method: 'DELETE',
   })
+  if (!res.ok && res.status !== 204) {
+    const err = await res.json().catch(() => ({ error: '删除失败' }))
+    throw new Error((err as { error?: string }).error || '删除失败')
+  }
 }
 
 /**

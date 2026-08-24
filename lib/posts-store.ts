@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises'
+﻿import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
 
@@ -144,6 +144,15 @@ export type PostInput = {
   status?: 'draft' | 'published'
 }
 
+async function writePosts(posts: Post[]): Promise<void> {
+  try {
+    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  } catch (err) {
+    log.error('文件写入失败（可能是只读文件系统）', { error: String(err) })
+    throw new Error('写入失败：文件系统不可写，请检查部署环境配置')
+  }
+}
+
 export async function createPost(input: PostInput): Promise<Post> {
   const content = (input.content ?? '').trim()
   const title = (input.title ?? '').trim() || '无题'
@@ -160,7 +169,7 @@ export async function createPost(input: PostInput): Promise<Post> {
   log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category })
   const posts = await readAllPosts()
   posts.unshift(post)
-  await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  await writePosts(posts)
   log.info('文章创建成功', { slug: post.slug, total: posts.length })
   return post
 }
@@ -185,7 +194,7 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
     status: input.status !== undefined ? input.status : (current.status ?? 'published'),
   }
   posts[idx] = updated
-  await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  await writePosts(posts)
   log.info('文章更新成功', { slug, title: updated.title })
   return updated
 }
@@ -232,7 +241,7 @@ export async function deletePost(slug: string): Promise<boolean> {
   const posts = await readAllPosts()
   const next = posts.filter((p) => p.slug !== slug)
   if (next.length === posts.length) return false
-  await fs.writeFile(DATA_FILE, JSON.stringify(next, null, 2), 'utf-8')
+  await writePosts(next)
   log.info('文章删除成功', { slug, remaining: next.length })
   return true
 }
