@@ -9,6 +9,8 @@ const TOTAL_KEY = 'total_views'
 const LOCAL_FILE = path.join(process.cwd(), 'data', 'stats.json')
 
 function isVercel(): boolean {
+  // 构建时强制用本地，运行时才用 Vercel KV
+  if (process.env.NEXT_PHASE === 'build') return false
   return process.env.VERCEL === '1' || !!process.env.KV_REST_API_URL
 }
 
@@ -31,13 +33,12 @@ function getDateNDaysAgo(n: number): string {
 }
 
 // ==================== Vercel KV 实现 ====================
-
-const KV_MODULE = '@vercel/kv'
+// 使用 eval('require') 彻底绕过 Turbopack/Webpack 静态分析
 
 function loadKvModule(): any | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-    return require(KV_MODULE)
+    const req = eval('require') as NodeRequire
+    return req('@vercel/kv')
   } catch {
     return null
   }

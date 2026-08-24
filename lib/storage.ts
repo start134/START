@@ -7,6 +7,9 @@ const log = createLogger('storage')
 export type StorageBackend = 'local' | 'vercel'
 
 function getBackend(): StorageBackend {
+  // 构建时强制用本地，运行时才用 Vercel
+  // NEXT_PHASE 在 Next.js 构建期间为 'build'，运行时为 'runtime'
+  if (process.env.NEXT_PHASE === 'build') return 'local'
   return process.env.VERCEL ? 'vercel' : 'local'
 }
 
@@ -68,22 +71,32 @@ export async function deleteFile(fileName: string): Promise<void> {
 }
 
 // ==================== Vercel Blob 实现 ====================
-// 使用 require() 动态加载，防止 Turbopack/Webpack 构建时静态分析
+// 仅在运行时且检测到 Vercel 环境时才加载
 
-const BLOB_MODULE = '@vercel/blob'
+// 延迟加载：只在需要时才导入模块
+type BlobModule = { get: (key: string) => Promise<{ text: () => Promise<string> } | null>; put: (key: string, body: string, opts?: { contentType?: string }) => Promise<unknown>; del: (key: string) => Promise<unknown> }
 
-function loadBlobModule(): any | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-    return require(BLOB_MODULE)
-  } catch {
-    return null
-  }
+let blobModulePromise: Promise<BlobModule | null> | null = null
+
+async function loadBlobModule(): Promise<BlobModule | null> {
+  if (blobModulePromise) return blobModulePromise
+  blobModulePromise = (async () => {
+    try {
+      // 用变量存储模块路径，防止静态分析
+      const modPath = '@vercel/blob'
+      const mod = await import(/* @__PURE__ */ modPath)
+      return mod as BlobModule
+    } catch (e) {
+      log.warn('加载 @vercel/blob 失败：', String(e))
+      return null
+    }
+  })()
+  return blobModulePromise
 }
 
 async function readFromBlob<T>(fileName: string): Promise<T | null> {
   try {
-    const mod = loadBlobModule()
+    const mod = await loadBlobModule()
     if (!mod) {
       log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
       return readFromLocalFallback<T>(fileName)
@@ -108,7 +121,7 @@ async function readFromBlob<T>(fileName: string): Promise<T | null> {
 
 async function writeToBlob(fileName: string, data: unknown): Promise<void> {
   try {
-    const mod = loadBlobModule()
+    const mod = await loadBlobModule()
     if (!mod) {
       log.warn('@vercel/blob 模块不可用，回退到本地存储', { fileName })
       await writeToLocalFallback(fileName, data)
@@ -126,7 +139,7 @@ async function writeToBlob(fileName: string, data: unknown): Promise<void> {
 
 async function deleteFromBlob(fileName: string): Promise<void> {
   try {
-    const mod = loadBlobModule()
+    const mod = await loadBlobModule()
     if (!mod) return
     await mod.del(fileName)
     log.debug('Vercel Blob：删除成功', { fileName })

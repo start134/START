@@ -26,6 +26,15 @@ const DATA_DIR = path.join(process.cwd(), 'data')
 const DATA_FILE = path.join(DATA_DIR, 'posts.json')
 const BLOB_FILE = 'posts.json'
 
+function isBuildTime(): boolean {
+  return process.env.NEXT_PHASE === 'build'
+}
+
+function getStorageBackend(): 'local' | 'vercel' {
+  if (isBuildTime()) return 'local'
+  return process.env.VERCEL ? 'vercel' : 'local'
+}
+
 // 站点初始示例文章（首次启动写入 data/posts.json）
 const seedPosts: Post[] = [
   {
@@ -84,7 +93,7 @@ const seedPosts: Post[] = [
 ]
 
 async function ensureFile(): Promise<void> {
-  const backend = process.env.VERCEL ? 'vercel' : 'local'
+  const backend = getStorageBackend()
   if (backend === 'vercel') {
     // Vercel 环境：尝试从 Blob 读取，失败则回退到种子数据
     try {
@@ -116,7 +125,7 @@ function sortByDateDesc(posts: Post[]): Post[] {
 
 export async function readAllPosts(): Promise<Post[]> {
   await ensureFile()
-  const backend = process.env.VERCEL ? 'vercel' : 'local'
+  const backend = getStorageBackend()
   try {
     let parsed: Post[]
     if (backend === 'vercel') {
@@ -193,7 +202,7 @@ export async function createPost(input: PostInput): Promise<Post> {
   log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category })
   const posts = await readAllPosts()
   posts.unshift(post)
-  const backend = process.env.VERCEL ? 'vercel' : 'local'
+  const backend = getStorageBackend()
   if (backend === 'vercel') {
     await writeJSON(BLOB_FILE, posts)
   } else {
@@ -224,13 +233,13 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
     status: input.status !== undefined ? input.status : (current.status ?? 'published'),
   }
   posts[idx] = updated
-  const backend = process.env.VERCEL ? 'vercel' : 'local'
+  const backend = getStorageBackend()
   if (backend === 'vercel') {
     await writeJSON(BLOB_FILE, posts)
   } else {
     await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
   }
-  log.info('文章更新成功', { slug, title: updated.title, status: updated.status, statusChanged: (current.status ?? 'published') !== (updated.status ?? 'published'), backend })
+  log.info('文章更新成功', { slug: post.slug, title: updated.title, status: updated.status, statusChanged: (current.status ?? 'published') !== (updated.status ?? 'published'), backend })
   return updated
 }
 
@@ -256,7 +265,7 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
   posts[idx] = updated
   try {
     const startTime = performance.now()
-    const backend = process.env.VERCEL ? 'vercel' : 'local'
+    const backend = getStorageBackend()
     if (backend === 'vercel') {
       await writeJSON(BLOB_FILE, posts)
     } else {
@@ -268,11 +277,13 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
       prevViews,
       newViews: updated.views,
       writeDurationMs: Math.round(performance.now() - startTime),
-      backend,
+      backend: getStorageBackend(),
     })
     // 同步更新每日统计
     try {
-      const { incrementTodayViews } = await import('@/lib/kv-stats')
+      // 用 eval 包裹防止静态分析
+      const dynamicImport = eval('import') as (path: string) => Promise<{ incrementTodayViews: () => Promise<void> }>
+      const { incrementTodayViews } = await dynamicImport('@/lib/kv-stats')
       await incrementTodayViews()
       log.debug('每日统计同步完成', { slug, date: today() })
     } catch (statsErr) {
