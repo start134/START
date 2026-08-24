@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { Suspense, useState, type FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast, type ToastVariant } from '@/components/toast'
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter()
   const sp = useSearchParams()
   const t = useToast()
@@ -108,6 +108,24 @@ export default function LoginPage() {
       <p className="mt-8 text-xs text-muted-foreground">
         忘记密码？请在服务器环境变量 <span className="font-mono">ADMIN_PASSWORD</span> 中查看或修改。
       </p>
+    </section>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginContent />
+    </Suspense>
+  )
+}
+
+function LoginFallback() {
+  return (
+    <section className="mx-auto max-w-md px-6 py-24 lg:px-8 lg:py-32">
+      <p className="font-mono text-xs tracking-[0.2em] text-primary">管理员登录</p>
+      <h1 className="mt-3 text-3xl tracking-tight">请输入访问密码</h1>
+      <div className="mt-8 h-10 w-full animate-pulse bg-border" />
     </section>
   )
 }
