@@ -1,16 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAuth } from '@/components/use-auth'
 import { useToast, type ToastVariant } from '@/components/toast'
-import { deletePost, fetchPosts, type Post } from '@/lib/posts'
+import { deletePost, fetchPosts, updatePost, type Post } from '@/lib/posts'
 
 export const dynamic = 'force-dynamic'
 
-export default function ArticlesPage() {
+function ArticlesContent() {
   const router = useRouter()
   const sp = useSearchParams()
   const [posts, setPosts] = useState<Post[]>([])
@@ -444,6 +444,32 @@ export default function ArticlesPage() {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+    </section>
+  )
+}
+
+export default function ArticlesPage() {
+  return (
+    <Suspense fallback={<ArticlesFallback />}>
+      <ArticlesContent />
+    </Suspense>
+  )
+}
+
+function ArticlesFallback() {
+  return (
+    <section className="mx-auto max-w-5xl px-6 py-16 lg:px-8 lg:py-24">
+      <p className="font-mono text-xs tracking-[0.2em] text-primary">全部文章</p>
+      <h1 className="mt-3 text-3xl tracking-tight sm:text-4xl">文章</h1>
+      <div className="mt-10 animate-pulse space-y-4">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="border-b border-border py-8">
+            <div className="h-4 w-32 bg-border" />
+            <div className="mt-3 h-6 w-2/3 bg-border" />
+            <div className="mt-2 h-4 w-full bg-border" />
+          </div>
+        ))}
+      </div>
     </section>
   )
 }
