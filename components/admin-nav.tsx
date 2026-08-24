@@ -10,6 +10,7 @@ const navItems = [
   { href: '/admin', label: '仪表盘', icon: '📊' },
   { href: '/admin/articles', label: '文章管理', icon: '📝' },
   { href: '/admin/new', label: '写文章', icon: '✍️' },
+  { href: '/admin/comments', label: '评论管理', icon: '💬' },
   { href: '/admin/notifications', label: '通知', icon: '🔔' },
 ]
 
@@ -20,6 +21,7 @@ export function AdminNav() {
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const [logoutLoading, setLogoutLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [pendingComments, setPendingComments] = useState(0)
 
   const fetchUnreadCount = useCallback(async () => {
     if (!authed) return
@@ -34,11 +36,29 @@ export function AdminNav() {
     }
   }, [authed])
 
+  const fetchPendingComments = useCallback(async () => {
+    if (!authed) return
+    try {
+      const res = await fetch('/api/admin/comments', { cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        const pending = Array.isArray(data) ? data.filter((c: { status: string }) => c.status === 'pending').length : 0
+        setPendingComments(pending)
+      }
+    } catch {
+      // 忽略错误
+    }
+  }, [authed])
+
   useEffect(() => {
     fetchUnreadCount()
-    const interval = setInterval(fetchUnreadCount, 30000)
+    fetchPendingComments()
+    const interval = setInterval(() => {
+      fetchUnreadCount()
+      fetchPendingComments()
+    }, 30000)
     return () => clearInterval(interval)
-  }, [fetchUnreadCount])
+  }, [fetchUnreadCount, fetchPendingComments])
 
   // 未登录则跳转登录页（但要等待加载完成，避免初始状态误判）
   useEffect(() => {
@@ -98,6 +118,11 @@ export function AdminNav() {
             >
               <span className="text-lg">{item.icon}</span>
               {item.label}
+              {item.href === '/admin/comments' && pendingComments > 0 && (
+                <span className="ml-auto rounded-full bg-amber-500 px-2 py-0.5 text-xs text-white">
+                  {pendingComments}
+                </span>
+              )}
               {item.href === '/admin/notifications' && unreadCount > 0 && (
                 <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
                   {unreadCount}
