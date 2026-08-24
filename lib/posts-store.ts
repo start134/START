@@ -1,10 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
-import { readJSON, writeJSON } from '@/lib/storage'
-
-// 服务端文章存储：本地用 JSON 文件，Vercel 用 Blob
-// 客户端通过 type-only import 引用 Post 类型，不会把 fs 打进客户端 bundle。
 
 const log = createLogger('posts-store')
 
@@ -16,26 +12,13 @@ export type Post = {
   excerpt: string
   content: string
   read: string
-  /** 真实阅读量；旧数据可能没有，前端用 `?? 0` 兜底 */
   views?: number
-  /** 发布状态；旧数据没有该字段视为已发布 */
   status?: 'draft' | 'published'
 }
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DATA_FILE = path.join(DATA_DIR, 'posts.json')
-const BLOB_FILE = 'posts.json'
 
-function isBuildTime(): boolean {
-  return process.env.NEXT_PHASE === 'phase-production-build'
-}
-
-function getStorageBackend(): 'local' | 'vercel' {
-  if (isBuildTime()) return 'local'
-  return process.env.VERCEL ? 'vercel' : 'local'
-}
-
-// 站点初始示例文章（首次启动写入 data/posts.json）
 const seedPosts: Post[] = [
   {
     slug: 'liubai-shi-yizhong-biaoda',
@@ -92,76 +75,38 @@ const seedPosts: Post[] = [
   },
 ]
 
-async function ensureFile(): Promise<void> {
-  const backend = getStorageBackend()
-  if (backend === 'vercel') {
-    // Vercel 环境：尝试从 Blob 读取，失败则回退到种子数据
-    try {
-      const existing = await readJSON<Post[]>(BLOB_FILE)
-      if (!existing || existing.length === 0) {
-        log.info('Vercel Blob：写入种子数据', { seedCount: seedPosts.length })
-        await writeJSON(BLOB_FILE, seedPosts)
-      }
-    } catch (err) {
-      // 构建时 Blob 可能不可用，静默跳过
-      log.warn('Vercel Blob：ensureFile 失败，将使用种子数据', { error: String(err) })
-    }
-    return
-  }
-
-  // 本地模式：检查 data/posts.json，不存在则创建种子数据
-  // 注意：构建时（phase-production-build）文件系统可能只读，写文件失败时直接跳过
-  try {
-    await fs.access(DATA_FILE)
-  } catch {
-    try {
-      log.info('数据文件不存在，尝试写入种子数据', { file: DATA_FILE, seedCount: seedPosts.length })
-      await fs.mkdir(DATA_DIR, { recursive: true })
-      await fs.writeFile(DATA_FILE, JSON.stringify(seedPosts, null, 2), 'utf-8')
-      log.info('种子数据写入完成')
-    } catch (writeErr) {
-      // 构建时 Vercel 文件系统只读，写入失败不致命，readAllPosts 会回退到种子数据
-      log.warn('种子数据写入失败（可能是只读文件系统），将在读取时回退到内置种子', { error: String(writeErr) })
-    }
-  }
-}
-
 function sortByDateDesc(posts: Post[]): Post[] {
   return [...posts].sort((a, b) => b.date.localeCompare(a.date))
 }
 
+async function ensureFile(): Promise<void> {
+  try {
+    await fs.access(DATA_FILE)
+  } catch {
+    try {
+      log.info('数据文件不存在，写入种子数据', { file: DATA_FILE })
+      await fs.mkdir(DATA_DIR, { recursive: true })
+      await fs.writeFile(DATA_FILE, JSON.stringify(seedPosts, null, 2), 'utf-8')
+    } catch {
+      log.warn('种子数据写入失败（可能是只读文件系统），将使用内置种子')
+    }
+  }
+}
+
 export async function readAllPosts(): Promise<Post[]> {
   await ensureFile()
-  const backend = getStorageBackend()
   try {
-    let parsed: Post[]
-    if (backend === 'vercel') {
-      try {
-        const data = await readJSON<Post[]>(BLOB_FILE)
-        parsed = data ?? []
-      } catch (blobErr) {
-        log.warn('Vercel Blob：读取失败，使用种子数据', { error: String(blobErr) })
-        parsed = seedPosts
-      }
-    } else {
-      try {
-        const raw = await fs.readFile(DATA_FILE, 'utf-8')
-        parsed = JSON.parse(raw) as Post[]
-      } catch {
-        // 构建时文件可能不存在或文件系统只读，回退到种子数据
-        log.warn('本地数据文件读取失败，使用种子数据', { file: DATA_FILE })
-        parsed = seedPosts
-      }
-    }
+    const raw = await fs.readFile(DATA_FILE, 'utf-8')
+    const parsed = JSON.parse(raw) as Post[]
     if (!Array.isArray(parsed)) {
       log.warn('数据文件内容不是数组，返回种子数据')
       return sortByDateDesc(seedPosts)
     }
     const sorted = sortByDateDesc(parsed)
-    log.info('读取全部文章成功', { count: sorted.length, backend })
+    log.info('读取全部文章成功', { count: sorted.length })
     return sorted
   } catch (err) {
-    log.error('读取全部文章失败，返回种子数据', { error: String(err) })
+    log.warn('读取数据文件失败，使用种子数据', { error: String(err) })
     return sortByDateDesc(seedPosts)
   }
 }
@@ -196,6 +141,7 @@ export type PostInput = {
   category?: string
   excerpt?: string
   content?: string
+  status?: 'draft' | 'published'
 }
 
 export async function createPost(input: PostInput): Promise<Post> {
@@ -214,14 +160,8 @@ export async function createPost(input: PostInput): Promise<Post> {
   log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category })
   const posts = await readAllPosts()
   posts.unshift(post)
-  const backend = getStorageBackend()
-  if (backend === 'vercel') {
-    await writeJSON(BLOB_FILE, posts)
-  } else {
-    await fs.mkdir(DATA_DIR, { recursive: true })
-    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
-  }
-  log.info('文章创建成功', { slug: post.slug, total: posts.length, status: post.status, backend })
+  await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  log.info('文章创建成功', { slug: post.slug, total: posts.length })
   return post
 }
 
@@ -245,17 +185,11 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
     status: input.status !== undefined ? input.status : (current.status ?? 'published'),
   }
   posts[idx] = updated
-  const backend = getStorageBackend()
-  if (backend === 'vercel') {
-    await writeJSON(BLOB_FILE, posts)
-  } else {
-    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
-  }
-  log.info('文章更新成功', { slug: post.slug, title: updated.title, status: updated.status, statusChanged: (current.status ?? 'published') !== (updated.status ?? 'published'), backend })
+  await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  log.info('文章更新成功', { slug, title: updated.title })
   return updated
 }
 
-/** 阅读量原子 +1；无需鉴权，公开调用。5 分钟去重由前端 localStorage 负责。 */
 export async function incrementRead(slug: string): Promise<Post | undefined> {
   const posts = await readAllPosts()
   const idx = posts.findIndex((p) => p.slug === slug)
@@ -264,79 +198,40 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
     return undefined
   }
   const current = posts[idx]
-  // 草稿不计阅读量
   if ((current.status ?? 'published') === 'draft') {
-    log.info('草稿不计阅读量', { slug, title: current.title })
+    log.info('草稿不计阅读量', { slug })
     return current
   }
-  const prevViews = current.views ?? 0
-  const updated: Post = {
-    ...current,
-    views: prevViews + 1,
-  }
+  const updated: Post = { ...current, views: (current.views ?? 0) + 1 }
   posts[idx] = updated
   try {
-    const startTime = performance.now()
-    const backend = getStorageBackend()
-    if (backend === 'vercel') {
-      await writeJSON(BLOB_FILE, posts)
-    } else {
-      await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
-    }
-    log.info('阅读量 +1 成功', {
-      slug,
-      title: updated.title,
-      prevViews,
-      newViews: updated.views,
-      writeDurationMs: Math.round(performance.now() - startTime),
-      backend: getStorageBackend(),
-    })
-    // 同步更新每日统计
+    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
     try {
       const { incrementTodayViews } = await import('@/lib/kv-stats')
       await incrementTodayViews()
-      log.debug('每日统计同步完成', { slug, date: today() })
-    } catch (statsErr) {
-      log.error('每日统计同步失败（不影响阅读量）', { slug, error: String(statsErr) })
+    } catch {
+      // 统计失败不影响阅读量
     }
   } catch (err) {
-    log.error('阅读量 +1 写入失败（不影响阅读）', { slug, error: String(err) })
-    return updated // 读数失败不阻断读者
+    log.warn('阅读量写入失败', { slug, error: String(err) })
   }
   return updated
 }
 
-/** 获取相邻文章（上一篇=更早写的，下一篇=更晚写的），只含已发布 */
 export async function getAdjacentPosts(slug: string): Promise<{ prev?: Post; next?: Post }> {
   const posts = await readAllPosts()
-  // 只在已发布文章中找相邻
   const published = posts.filter((p) => (p.status ?? 'published') === 'published')
   const idx = published.findIndex((p) => p.slug === slug)
-  if (idx < 0) {
-    log.warn('getAdjacentPosts：文章不在已发布列表中', { slug, publishedCount: published.length })
-    return {}
-  }
-  // readAllPosts 按日期降序：idx=0 是最新
-  // 上一篇（更早写的）= idx+1，下一篇（更晚写的）= idx-1
+  if (idx < 0) return {}
   const prev = idx + 1 < published.length ? published[idx + 1] : undefined
   const next = idx - 1 >= 0 ? published[idx - 1] : undefined
-  log.info('getAdjacentPosts 查询成功', {
-    slug,
-    idx,
-    publishedCount: published.length,
-    prevSlug: prev?.slug,
-    nextSlug: next?.slug,
-  })
   return { prev, next }
 }
 
 export async function deletePost(slug: string): Promise<boolean> {
   const posts = await readAllPosts()
   const next = posts.filter((p) => p.slug !== slug)
-  if (next.length === posts.length) {
-    log.warn('删除文章未找到目标', { slug })
-    return false
-  }
+  if (next.length === posts.length) return false
   await fs.writeFile(DATA_FILE, JSON.stringify(next, null, 2), 'utf-8')
   log.info('文章删除成功', { slug, remaining: next.length })
   return true
