@@ -21,7 +21,7 @@ export async function GET() {
 
   try {
     const comments = await getAllCommentsForAdmin()
-    log.info('获取所有评论成功', { count: comments.length })
+    log.debug('获取所有评论成功', { count: comments.length })
     return NextResponse.json(comments)
   } catch (err) {
     log.error('获取评论失败', { error: String(err) })
@@ -41,21 +41,31 @@ export async function PATCH(request: Request) {
   }
 
   if (action === 'approve') {
-    const comment = await approveComment(id)
-    if (!comment) {
-      return NextResponse.json({ error: '评论不存在' }, { status: 404 })
+    try {
+      const comment = await approveComment(id)
+      if (!comment) {
+        return NextResponse.json({ error: '评论不存在' }, { status: 404 })
+      }
+      log.info('评论已批准', { id })
+      return NextResponse.json(comment)
+    } catch (err) {
+      log.error('批准评论失败', { id, error: String(err) })
+      return NextResponse.json({ error: '操作失败' }, { status: 500 })
     }
-    log.info('评论已批准', { id })
-    return NextResponse.json(comment)
   }
 
   if (action === 'delete') {
-    const deleted = await deleteComment(id)
-    if (!deleted) {
-      return NextResponse.json({ error: '评论不存在' }, { status: 404 })
+    try {
+      const deleted = await deleteComment(id)
+      if (!deleted) {
+        return NextResponse.json({ error: '评论不存在' }, { status: 404 })
+      }
+      log.info('评论已删除', { id })
+      return NextResponse.json({ success: true })
+    } catch (err) {
+      log.error('删除评论失败', { id, error: String(err) })
+      return NextResponse.json({ error: '操作失败' }, { status: 500 })
     }
-    log.info('评论已删除', { id })
-    return NextResponse.json({ success: true })
   }
 
   return NextResponse.json({ error: '未知操作' }, { status: 400 })

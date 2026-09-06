@@ -1,8 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // 类型错误必须阻塞构建（不要设置 ignoreBuildErrors）
   images: {
     unoptimized: true,
   },

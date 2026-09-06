@@ -1,15 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { cookies } from 'next/headers'
 import { createLogger } from '@/lib/logger'
-import { auth, validateSession } from '@/lib/auth'
-import { createPost, readAllPosts, type PostInput } from '@/lib/posts-store'
+import { isAuthenticatedRequest } from '@/lib/auth'
+import { createPost, isPublishedPost, readAllPosts, type PostInput } from '@/lib/posts-store'
 
 const log = createLogger('api/posts')
 
 async function requireAuth(): Promise<NextResponse | null> {
-  const cookieStore = await cookies()
-  const token = cookieStore.get(auth.cookieName)?.value
-  if (!validateSession(token)) {
+  if (!(await isAuthenticatedRequest())) {
     log.warn('鉴权失败：未登录或会话已过期')
     return NextResponse.json({ error: '请先登录' }, { status: 401 })
   }
@@ -17,11 +14,15 @@ async function requireAuth(): Promise<NextResponse | null> {
 }
 
 export async function GET() {
-  log.info('收到请求：GET /api/posts')
+  log.debug('收到请求：GET /api/posts')
   try {
     const posts = await readAllPosts()
-    log.info('响应：GET /api/posts', { count: posts.length })
-    return NextResponse.json(posts)
+    // 草稿只对管理员可见：未登录请求一律过滤，避免草稿内容被拉到客户端
+    const visible = (await isAuthenticatedRequest())
+      ? posts
+      : posts.filter(isPublishedPost)
+    log.debug('响应：GET /api/posts', { count: visible.length })
+    return NextResponse.json(visible)
   } catch (err) {
     log.error('GET /api/posts 处理失败', { error: String(err) })
     return NextResponse.json({ error: '服务器内部错误' }, { status: 500 })
@@ -29,7 +30,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  log.info('收到请求：POST /api/posts')
+  log.debug('收到请求：POST /api/posts')
   const authErr = await requireAuth()
   if (authErr) return authErr
   let body: PostInput

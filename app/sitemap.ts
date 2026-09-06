@@ -1,10 +1,11 @@
 import type { MetadataRoute } from 'next'
-import { readAllPosts } from '@/lib/posts-store'
+import { isPublishedPost, readAllPosts } from '@/lib/posts-store'
 import { SITE_URL, parseLocalDate } from '@/lib/site'
 
 // Next 16 App Router Metadata Route：自动输出到 /sitemap.xml
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const posts = await readAllPosts()
+  // 草稿不出现在 sitemap
+  const posts = (await readAllPosts()).filter(isPublishedPost)
   const now = new Date()
 
   const staticEntries: MetadataRoute.Sitemap = [

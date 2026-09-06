@@ -1,6 +1,7 @@
-﻿import fs from 'node:fs/promises'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
+import { withFileLock, writeFileAtomic } from '@/lib/storage'
 
 const log = createLogger('posts-store')
 
@@ -18,6 +19,8 @@ export type Post = {
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DATA_FILE = path.join(DATA_DIR, 'posts.json')
+// 与 storage.withFileLock 共用的锁键：串行化对 posts.json 的读改写事务
+const DATA_LOCK_KEY = 'posts.json'
 
 const seedPosts: Post[] = [
   {
@@ -93,20 +96,31 @@ async function ensureFile(): Promise<void> {
   }
 }
 
-export async function readAllPosts(): Promise<Post[]> {
+export function isPublishedPost(post: Post): boolean {
+  return (post.status ?? 'published') === 'published'
+}
+
+// 供写入路径使用：文件损坏/不可读时抛错，绝不拿种子数据回写覆盖真实文章
+async function loadPostsForWrite(): Promise<Post[]> {
   await ensureFile()
+  let raw: string
   try {
-    const raw = await fs.readFile(DATA_FILE, 'utf-8')
-    const parsed = JSON.parse(raw) as Post[]
-    if (!Array.isArray(parsed)) {
-      log.warn('数据文件内容不是数组，返回种子数据')
-      return sortByDateDesc(seedPosts)
-    }
-    const sorted = sortByDateDesc(parsed)
-    log.info('读取全部文章成功', { count: sorted.length })
-    return sorted
+    raw = await fs.readFile(DATA_FILE, 'utf-8')
   } catch (err) {
-    log.warn('读取数据文件失败，使用种子数据', { error: String(err) })
+    throw new Error(`数据文件不可读，已中止写入以保护现有数据: ${String(err)}`)
+  }
+  const parsed = JSON.parse(raw) as Post[]
+  if (!Array.isArray(parsed)) {
+    throw new Error('数据文件内容不是数组，已中止写入以保护现有数据')
+  }
+  return sortByDateDesc(parsed)
+}
+
+export async function readAllPosts(): Promise<Post[]> {
+  try {
+    return await loadPostsForWrite()
+  } catch (err) {
+    log.warn('读取数据文件失败，使用种子数据（仅用于展示，不会回写）', { error: String(err) })
     return sortByDateDesc(seedPosts)
   }
 }
@@ -115,7 +129,7 @@ export async function readPost(slug: string): Promise<Post | undefined> {
   const posts = await readAllPosts()
   const found = posts.find((p) => p.slug === slug)
   if (found) {
-    log.info('查询单篇文章命中', { slug, title: found.title })
+    log.debug('查询单篇文章命中', { slug, title: found.title })
   } else {
     log.warn('查询单篇文章未命中', { slug, total: posts.length })
   }
@@ -146,7 +160,8 @@ export type PostInput = {
 
 async function writePosts(posts: Post[]): Promise<void> {
   try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+    await fs.mkdir(DATA_DIR, { recursive: true })
+    await writeFileAtomic(DATA_FILE, JSON.stringify(posts, null, 2))
   } catch (err) {
     log.error('文件写入失败（可能是只读文件系统）', { error: String(err) })
     throw new Error('写入失败：文件系统不可写，请检查部署环境配置')
@@ -167,69 +182,78 @@ export async function createPost(input: PostInput): Promise<Post> {
     status: input.status === 'draft' ? 'draft' : 'published',
   }
   log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category })
-  const posts = await readAllPosts()
-  posts.unshift(post)
-  await writePosts(posts)
-  log.info('文章创建成功', { slug: post.slug, total: posts.length })
+  await withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    posts.unshift(post)
+    await writePosts(posts)
+  })
+  log.info('文章创建成功', { slug: post.slug })
   return post
 }
 
 export async function updatePost(slug: string, input: PostInput): Promise<Post | undefined> {
-  const posts = await readAllPosts()
-  const idx = posts.findIndex((p) => p.slug === slug)
-  if (idx < 0) {
-    log.warn('更新文章未找到目标', { slug })
-    return undefined
-  }
-  const current = posts[idx]
-  const content = input.content !== undefined ? input.content.trim() : current.content
-  const title = input.title !== undefined ? input.title.trim() || '无题' : current.title
-  const updated: Post = {
-    ...current,
-    title,
-    category: input.category !== undefined ? input.category.trim() || '未分类' : current.category,
-    excerpt: input.excerpt !== undefined ? input.excerpt.trim() || content.slice(0, 60) : current.excerpt,
-    content,
-    read: input.content !== undefined ? estimateRead(content) : current.read,
-    status: input.status !== undefined ? input.status : (current.status ?? 'published'),
-  }
-  posts[idx] = updated
-  await writePosts(posts)
-  log.info('文章更新成功', { slug, title: updated.title })
-  return updated
+  return withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    const idx = posts.findIndex((p) => p.slug === slug)
+    if (idx < 0) {
+      log.warn('更新文章未找到目标', { slug })
+      return undefined
+    }
+    const current = posts[idx]
+    const content = input.content !== undefined ? input.content.trim() : current.content
+    const title = input.title !== undefined ? input.title.trim() || '无题' : current.title
+    const updated: Post = {
+      ...current,
+      title,
+      category: input.category !== undefined ? input.category.trim() || '未分类' : current.category,
+      excerpt: input.excerpt !== undefined ? input.excerpt.trim() || content.slice(0, 60) : current.excerpt,
+      content,
+      read: input.content !== undefined ? estimateRead(content) : current.read,
+      status: input.status !== undefined ? input.status : (current.status ?? 'published'),
+    }
+    posts[idx] = updated
+    await writePosts(posts)
+    log.info('文章更新成功', { slug, title: updated.title })
+    return updated
+  })
 }
 
 export async function incrementRead(slug: string): Promise<Post | undefined> {
-  const posts = await readAllPosts()
-  const idx = posts.findIndex((p) => p.slug === slug)
-  if (idx < 0) {
-    log.warn('阅读量 +1 未找到目标', { slug })
-    return undefined
-  }
-  const current = posts[idx]
-  if ((current.status ?? 'published') === 'draft') {
-    log.info('草稿不计阅读量', { slug })
-    return current
-  }
-  const updated: Post = { ...current, views: (current.views ?? 0) + 1 }
-  posts[idx] = updated
-  try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), 'utf-8')
+  let post: Post | undefined
+  let counted = false
+  await withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    const idx = posts.findIndex((p) => p.slug === slug)
+    if (idx < 0) {
+      log.warn('阅读量 +1 未找到目标', { slug })
+      return
+    }
+    const current = posts[idx]
+    if (!isPublishedPost(current)) {
+      log.info('草稿不计阅读量', { slug })
+      post = current
+      return
+    }
+    posts[idx] = { ...current, views: (current.views ?? 0) + 1 }
+    await writePosts(posts)
+    post = posts[idx]
+    counted = true
+  })
+  if (counted) {
+    // 每日统计失败不影响阅读量主流程
     try {
       const { incrementTodayViews } = await import('@/lib/kv-stats')
       await incrementTodayViews()
-    } catch {
-      // 统计失败不影响阅读量
+    } catch (err) {
+      log.warn('每日统计写入失败', { slug, error: String(err) })
     }
-  } catch (err) {
-    log.warn('阅读量写入失败', { slug, error: String(err) })
   }
-  return updated
+  return post
 }
 
 export async function getAdjacentPosts(slug: string): Promise<{ prev?: Post; next?: Post }> {
   const posts = await readAllPosts()
-  const published = posts.filter((p) => (p.status ?? 'published') === 'published')
+  const published = posts.filter(isPublishedPost)
   const idx = published.findIndex((p) => p.slug === slug)
   if (idx < 0) return {}
   const prev = idx + 1 < published.length ? published[idx + 1] : undefined
@@ -238,10 +262,12 @@ export async function getAdjacentPosts(slug: string): Promise<{ prev?: Post; nex
 }
 
 export async function deletePost(slug: string): Promise<boolean> {
-  const posts = await readAllPosts()
-  const next = posts.filter((p) => p.slug !== slug)
-  if (next.length === posts.length) return false
-  await writePosts(next)
-  log.info('文章删除成功', { slug, remaining: next.length })
-  return true
+  return withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    const next = posts.filter((p) => p.slug !== slug)
+    if (next.length === posts.length) return false
+    await writePosts(next)
+    log.info('文章删除成功', { slug, remaining: next.length })
+    return true
+  })
 }

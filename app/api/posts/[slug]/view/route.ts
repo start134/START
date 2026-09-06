@@ -9,15 +9,16 @@ type Ctx = { params: Promise<{ slug: string }> }
 
 export async function POST(_request: NextRequest, ctx: Ctx) {
   const { slug } = await ctx.params
-  log.info('收到请求：POST /api/posts/[slug]/view', { slug })
+  log.debug('收到请求：POST /api/posts/[slug]/view', { slug })
   try {
     const updated = await incrementRead(slug)
     if (!updated) {
       log.warn('响应：POST view 未找到文章，返回 404', { slug })
       return NextResponse.json({ error: '文章不存在' }, { status: 404 })
     }
-    log.info('响应：POST view 成功', { slug, views: updated.views })
-    return NextResponse.json(updated)
+    log.debug('响应：POST view 成功', { slug, views: updated.views })
+    // 只回传浏览数，不再把整篇文章（含正文）发给客户端
+    return NextResponse.json({ slug, views: updated.views ?? 0 })
   } catch (err) {
     log.error('POST /api/posts/[slug]/view 处理失败', { slug, error: String(err) })
     // 阅读量失败不阻断读者，返回 200 + 原样（避免控制台报错）

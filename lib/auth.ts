@@ -1,10 +1,13 @@
 // 服务端鉴权工具：
-// - 从环境变量读取管理员密码（未设置时使用开发期默认值并打 warn）
-// - 登录成功签发随机 token，写入服务端 token 集合并以 HttpOnly Cookie 下发
-// - 后续请求通过 Cookie 自动鉴权；登出/过期清除
+// - 从环境变量读取管理员密码（生产未设置时由登录接口直接拒绝；开发期回退默认值并 warn）
+// - 登录成功签发 HMAC 签名的无状态会话 token（`${exp}.${签名}`），以 HttpOnly Cookie 下发。
+//   不依赖服务端存储，多实例/冷启动部署会话不丢；修改密码（或 SESSION_SECRET）即全员下线。
+// - 后续请求通过 Cookie 自动鉴权；登出仅清除 Cookie，已签发 token 在过期前仍有效，
+//   该泄露窗口与 7 天 TTL 对齐，单管理员博客可接受。
 // 仅用于服务端（lib/posts-store / route handlers），禁止在客户端组件直接 import。
 
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import { cookies } from 'next/headers'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('auth')
@@ -12,19 +15,8 @@ const log = createLogger('auth')
 const COOKIE_NAME = 'start_admin_token'
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 天
 
-// 内存中的 token 表：{ token: expireAtMs }
-// 注意：dev 模式下 Turbopack 会为 RSC（如文章详情页）与 route handler（/api/auth/*）
-// 创建不同的 lib/auth 模块实例，若直接 new Map() 各实例各持一张表，
-// 会导致登录签发的 token 在文章页鉴权时查不到（草稿 404）。
-// 借助 globalThis（进程级，跨模块实例共享）让两处用同一张表。
-// 生产多实例部署场景仍应改到 Redis/DB。
-const globalForTokens = globalThis as unknown as {
-  __startTokenStore?: Map<string, number>
-}
-const tokenStore =
-  globalForTokens.__startTokenStore ?? new Map<string, number>()
-if (!globalForTokens.__startTokenStore) {
-  globalForTokens.__startTokenStore = tokenStore
+export function isAdminPasswordConfigured(): boolean {
+  return !!process.env.ADMIN_PASSWORD
 }
 
 function getAdminPassword(): string {
@@ -33,6 +25,12 @@ function getAdminPassword(): string {
   const fallback = '123456'
   log.warn('未设置 ADMIN_PASSWORD 环境变量，使用开发期默认密码。请在 .env.local 中配置 ADMIN_PASSWORD=你的密码', { fallback })
   return fallback
+}
+
+// 会话签名密钥：优先 SESSION_SECRET，否则从管理员密码派生（改密码 = 所有旧会话失效）
+function getSessionSecret(): string {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET
+  return `start-blog:v1:${process.env.ADMIN_PASSWORD ?? 'dev-insecure'}`
 }
 
 // 用 timingSafeEqual 做恒定时间比较，避免时序攻击
@@ -57,33 +55,40 @@ export function verifyAdminPassword(input: string): boolean {
   return ok
 }
 
-function generateToken(): string {
-  return randomBytes(32).toString('hex')
+function sign(payload: string): string {
+  return createHmac('sha256', getSessionSecret()).update(payload).digest('hex')
+}
+
+// token 格式 `${过期毫秒}.${HMAC 签名}`，签名恒为 64 位 hex
+function signatureEquals(sig: string, expected: string): boolean {
+  if (sig.length !== expected.length) return false
+  return safeEqual(sig, expected)
 }
 
 export function issueSession(): { token: string; expireAt: Date } {
-  const token = generateToken()
-  const expireAt = new Date(Date.now() + TOKEN_TTL_MS)
-  tokenStore.set(token, expireAt.getTime())
-  log.info('签发新会话', { expireAt: expireAt.toISOString(), active: tokenStore.size })
-  return { token, expireAt }
-}
-
-export function revokeSession(token: string): void {
-  const existed = tokenStore.delete(token)
-  log.info('撤销会话', { existed, remaining: tokenStore.size })
+  const expireAt = Date.now() + TOKEN_TTL_MS
+  const payload = String(expireAt)
+  const token = `${payload}.${sign(payload)}`
+  log.info('签发新会话', { expireAt: new Date(expireAt).toISOString() })
+  return { token, expireAt: new Date(expireAt) }
 }
 
 export function validateSession(token: string | null | undefined): boolean {
   if (!token) return false
-  const expireAt = tokenStore.get(token)
-  if (!expireAt) return false
-  if (Date.now() > expireAt) {
-    tokenStore.delete(token)
-    log.debug('会话过期已清理', { remaining: tokenStore.size })
-    return false
-  }
+  const dot = token.lastIndexOf('.')
+  if (dot <= 0) return false
+  const payload = token.slice(0, dot)
+  const sig = token.slice(dot + 1)
+  if (!signatureEquals(sig, sign(payload))) return false
+  const expireAt = Number(payload)
+  if (!Number.isFinite(expireAt) || Date.now() > expireAt) return false
   return true
+}
+
+// 供 route handler / RSC 统一判断当前请求是否已登录
+export async function isAuthenticatedRequest(): Promise<boolean> {
+  const cookieStore = await cookies()
+  return validateSession(cookieStore.get(COOKIE_NAME)?.value)
 }
 
 export const auth = {

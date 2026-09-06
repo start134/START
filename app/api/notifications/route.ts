@@ -22,7 +22,7 @@ export async function GET() {
   try {
     const notifications = await readAllNotifications()
     const unreadCount = await getUnreadCount()
-    log.info('获取通知成功', { count: notifications.length, unreadCount })
+    log.debug('获取通知成功', { count: notifications.length, unreadCount })
     return NextResponse.json({ notifications, unreadCount })
   } catch (err) {
     log.error('获取通知失败', { error: String(err) })

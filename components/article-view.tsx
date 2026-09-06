@@ -64,8 +64,10 @@ export function ArticleView({
     } catch {
       // localStorage 故障：跳过去重，继续计数（不丢阅读量）
     }
-    incrementView(slug).then((updated) => {
-      if (updated) setPost(updated)
+    incrementView(slug).then((views) => {
+      if (typeof views === 'number') {
+        setPost((prev) => (prev ? { ...prev, views } : prev))
+      }
     })
   }, [slug])
 

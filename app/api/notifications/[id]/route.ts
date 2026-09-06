@@ -23,13 +23,17 @@ export async function PATCH(
   if (authErr) return authErr
 
   const { id } = await params
-  const notification = await markAsRead(id)
-  if (!notification) {
-    return NextResponse.json({ error: '通知不存在' }, { status: 404 })
+  try {
+    const notification = await markAsRead(id)
+    if (!notification) {
+      return NextResponse.json({ error: '通知不存在' }, { status: 404 })
+    }
+    log.info('通知已标记为已读', { id })
+    return NextResponse.json(notification)
+  } catch (err) {
+    log.error('标记通知失败', { id, error: String(err) })
+    return NextResponse.json({ error: '操作失败' }, { status: 500 })
   }
-
-  log.info('通知已标记为已读', { id })
-  return NextResponse.json(notification)
 }
 
 export async function DELETE(
@@ -40,11 +44,15 @@ export async function DELETE(
   if (authErr) return authErr
 
   const { id } = await params
-  const deleted = await deleteNotification(id)
-  if (!deleted) {
-    return NextResponse.json({ error: '通知不存在' }, { status: 404 })
+  try {
+    const deleted = await deleteNotification(id)
+    if (!deleted) {
+      return NextResponse.json({ error: '通知不存在' }, { status: 404 })
+    }
+    log.info('通知已删除', { id })
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    log.error('删除通知失败', { id, error: String(err) })
+    return NextResponse.json({ error: '操作失败' }, { status: 500 })
   }
-
-  log.info('通知已删除', { id })
-  return NextResponse.json({ success: true })
 }

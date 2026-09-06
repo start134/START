@@ -11,10 +11,9 @@ export async function GET(request: Request) {
   // 限制范围 7-90 天
   const safeDays = Math.max(7, Math.min(90, days))
   
-  log.info('统计 API 被请求', { 
-    requestedDays: days, 
+  log.debug('统计 API 被请求', {
+    requestedDays: days,
     safeDays,
-    url: request.url,
   })
   
   try {
@@ -41,12 +40,9 @@ export async function GET(request: Request) {
       totalViews,
       todayViews,
       weekViews,
-      dateRange: daily.length > 0 
-        ? `${daily[0].date} ~ ${daily[daily.length - 1].date}`
-        : 'empty',
       durationMs: duration,
     })
-    
+
     return NextResponse.json(response)
   } catch (err) {
     log.error('统计 API 响应失败', {
@@ -54,8 +50,9 @@ export async function GET(request: Request) {
       error: String(err),
       stack: err instanceof Error ? err.stack : undefined,
     })
+    // 不把内部错误细节返回给客户端
     return NextResponse.json(
-      { error: '获取统计数据失败', detail: String(err) },
+      { error: '获取统计数据失败' },
       { status: 500 }
     )
   }

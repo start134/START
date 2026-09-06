@@ -1,91 +1,90 @@
-# Vercel 部署指南
+# 部署指南
 
-## 部署步骤
+## 重要：先读这一段
 
-### 1. 准备工作
+本项目当前的数据层是**本地 JSON 文件**（`data/posts.json`、`data/comments.json`、
+`data/stats.json` 等），加进程内写锁。这意味着：
 
-确保您已安装 Vercel CLI：
+- **必须部署在有持久化磁盘的 Node 主机上**（VPS、Railway / Render 等挂载磁盘的服务、
+  自托管 Docker），文章、评论、统计才能持久保存。
+- **Vercel 等无持久文件系统的 Serverless 平台当前不受支持**：`data/` 目录写不进去
+  （或写了在实例重启后丢失），发文章会"看似成功、重启即消失"。
+  此前文档提到的 Vercel Blob / KV 自动切换**尚未实现**——代码里没有任何 Blob/KV 逻辑。
+  如要上 Vercel，需先把 `lib/storage.ts` / `lib/posts-store.ts` / `lib/kv-stats.ts`
+  的数据层替换为 Blob/KV/数据库实现。
+- 数据层为单实例设计（进程内锁 + 文件存储），请以**单实例**方式运行；
+  多实例需要共享数据库。
+- 会话是无状态 HMAC 签名 Cookie（见 `lib/auth.ts`），不依赖服务端存储，
+  重启/多实例不会导致登录态丢失；修改 `ADMIN_PASSWORD` 会让所有已登录会话失效。
+
+## 部署步骤（Node 主机）
+
+### 1. 准备环境
+
+- Node.js 20+（与本地开发版本一致）
+- 建议用 pm2 或 systemd 守护进程
+
+### 2. 获取代码并安装依赖
+
 ```bash
-npm install -g vercel
+git clone <你的仓库地址> STARTweb
+cd STARTweb
+npm install
+npm run build
 ```
 
-### 2. 推送代码到 GitHub
+### 3. 配置环境变量
+
+创建 `.env.local`（或用进程管理器注入环境变量）：
+
+| 变量名 | 必填 | 说明 |
+|---|---|---|
+| `ADMIN_PASSWORD` | **生产必填** | 管理员登录密码。生产环境未配置时登录接口直接返回 503，不存在默认密码回退 |
+| `NEXT_PUBLIC_SITE_URL` | 建议 | 如 `https://yourblog.com`，用于 sitemap / RSS / OG 卡片的 URL 拼接 |
+| `SESSION_SECRET` | 可选 | 会话签名密钥；不设置时从 `ADMIN_PASSWORD` 派生 |
+
+### 4. 启动
 
 ```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/您的用户名/STARTweb.git
-git push -u origin main
+npm run start   # 默认 3000 端口，可用 PORT 环境变量修改
 ```
 
-### 3. 在 Vercel 上导入项目
+用 Nginx / Caddy 反代并配置 HTTPS（`secure` Cookie 要求生产走 HTTPS）。
 
-1. 访问 [vercel.com](https://vercel.com) 并登录
-2. 点击 "Add New Project" → 选择您的 GitHub 仓库
-3. Framework 会自动检测为 Next.js
-4. 点击 "Deploy"
+### 5. 数据备份
 
-### 4. 配置环境变量
+所有数据都在 `data/` 目录下，备份该目录即可：
 
-在 Vercel 项目设置 → Environment Variables 中添加：
+```bash
+tar czf backup-$(date +%F).tgz data/
+```
 
-| 变量名 | 说明 | 示例 |
-|---|---|---|
-| `ADMIN_PASSWORD` | 管理员登录密码 | `您的强密码` |
+建议加入定时任务定期备份。
 
-### 5. 配置 Vercel KV（阅读量统计）
+## 本地开发
 
-1. 项目设置 → Storage → Create → KV Database
-2. 创建后会自动注入 `KV_REST_API_URL` 和 `KV_REST_API_TOKEN` 环境变量
-3. 代码会自动检测 Vercel 环境并使用 KV
+```bash
+npm install
+npm run dev     # http://localhost:3000
+```
 
-### 6. 配置 Vercel Blob（文章数据，可选）
-
-如果您需要多实例间共享文章数据：
-
-1. 项目设置 → Storage → Create → Blob Store
-2. 创建后会自动注入 `BLOB_READ_WRITE_TOKEN` 环境变量
-3. 在代码中使用 `lib/storage.ts` 的抽象接口
-
-## 本地开发 vs 生产环境
-
-| 功能 | 本地开发 | Vercel 生产 |
-|---|---|---|
-| 文章存储 | `data/posts.json` | Vercel Blob（自动） |
-| 阅读量统计 | `data/stats.json` / SQLite | Vercel KV（自动） |
-| 认证 Token | 内存 Map | 内存 Map（单实例可接受） |
-| 环境变量 | `.env.local` | Vercel 控制台配置 |
-
-## 自定义域名
-
-1. 在 Vercel 项目 → Settings → Domains
-2. 添加您的域名（如 `yourblog.com`）
-3. 按提示配置 DNS 记录
-4. Vercel 自动签发 SSL 证书
+本地未配置 `ADMIN_PASSWORD` 时使用开发默认密码 `123456`（仅开发环境；
+`.env.local` 已在 .gitignore 中，不会提交）。
 
 ## 有用的命令
 
 ```bash
-# 本地开发
-npm run dev
-
-# 构建生产版本
-npm run build
-
-# 部署到 Vercel
-vercel
-
-# 部署到生产环境
-vercel --prod
-
-# 查看日志
-vercel logs
+npm run dev     # 本地开发
+npm run build   # 构建生产版本
+npm run start   # 启动生产服务
+npx tsc --noEmit  # 类型检查（构建时也会执行）
 ```
 
 ## 注意事项
 
-1. **Vercel 文件系统是只读的**：`data/` 目录在 Vercel 上无法写入，代码已自动切换到 Blob/KV
-2. **SQLite 不适合 Vercel**：Vercel 的函数实例之间不共享文件系统，SQLite 数据会丢失
-3. **认证 Token**：Vercel 多实例部署时，内存 Token 不共享。管理员可能需要重新登录。如需持久化，建议使用 Vercel KV 存储 Token
-4. **免费额度**：Vercel Hobby 版提供 100GB 带宽/月，KV 1GB，Blob 1GB，对个人博客完全够用
+1. **不要部署到 Vercel**（当前代码）：Serverless 文件系统不持久，数据会丢。
+   上文"重要"一节有详细说明。
+2. **生产必须配置 `ADMIN_PASSWORD`**：这是登录的唯一凭证，请使用强密码。
+3. **内置限流**：登录失败 5 次/15 分钟锁定（按 IP）；评论 5 条/10 分钟（按 IP）。
+   均为进程内实现，重启后计数清零。
+4. **HTTPS**：生产环境 Cookie 带 `secure` 标记，请确保通过 HTTPS 访问。

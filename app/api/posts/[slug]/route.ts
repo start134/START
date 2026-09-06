@@ -1,17 +1,20 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { cookies } from 'next/headers'
 import { createLogger } from '@/lib/logger'
-import { auth, validateSession } from '@/lib/auth'
-import { deletePost, readPost, updatePost, type PostInput } from '@/lib/posts-store'
+import { isAuthenticatedRequest } from '@/lib/auth'
+import {
+  deletePost,
+  isPublishedPost,
+  readPost,
+  updatePost,
+  type PostInput,
+} from '@/lib/posts-store'
 
 const log = createLogger('api/posts/[slug]')
 
 type Ctx = { params: Promise<{ slug: string }> }
 
 async function requireAuth(): Promise<NextResponse | null> {
-  const cookieStore = await cookies()
-  const token = cookieStore.get(auth.cookieName)?.value
-  if (!validateSession(token)) {
+  if (!(await isAuthenticatedRequest())) {
     log.warn('鉴权失败：未登录或会话已过期')
     return NextResponse.json({ error: '请先登录' }, { status: 401 })
   }
@@ -20,14 +23,19 @@ async function requireAuth(): Promise<NextResponse | null> {
 
 export async function GET(_request: NextRequest, ctx: Ctx) {
   const { slug } = await ctx.params
-  log.info('收到请求：GET /api/posts/[slug]', { slug })
+  log.debug('收到请求：GET /api/posts/[slug]', { slug })
   try {
     const post = await readPost(slug)
     if (!post) {
       log.warn('响应：GET 未找到文章，返回 404', { slug })
       return NextResponse.json({ error: '文章不存在' }, { status: 404 })
     }
-    log.info('响应：GET 文章查询成功', { slug, title: post.title })
+    // 草稿对未登录请求一律 404，与文章详情页行为一致
+    if (!isPublishedPost(post) && !(await isAuthenticatedRequest())) {
+      log.warn('非管理员请求草稿，返回 404', { slug })
+      return NextResponse.json({ error: '文章不存在' }, { status: 404 })
+    }
+    log.debug('响应：GET 文章查询成功', { slug, title: post.title })
     return NextResponse.json(post)
   } catch (err) {
     log.error('GET /api/posts/[slug] 处理失败', { slug, error: String(err) })
@@ -37,7 +45,7 @@ export async function GET(_request: NextRequest, ctx: Ctx) {
 
 export async function PATCH(request: NextRequest, ctx: Ctx) {
   const { slug } = await ctx.params
-  log.info('收到请求：PATCH /api/posts/[slug]', { slug })
+  log.debug('收到请求：PATCH /api/posts/[slug]', { slug })
   const authErr = await requireAuth()
   if (authErr) return authErr
   let body: PostInput
@@ -63,7 +71,7 @@ export async function PATCH(request: NextRequest, ctx: Ctx) {
 
 export async function DELETE(_request: NextRequest, ctx: Ctx) {
   const { slug } = await ctx.params
-  log.info('收到请求：DELETE /api/posts/[slug]', { slug })
+  log.debug('收到请求：DELETE /api/posts/[slug]', { slug })
   const authErr = await requireAuth()
   if (authErr) return authErr
   try {

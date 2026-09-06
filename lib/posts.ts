@@ -1,4 +1,4 @@
-﻿// 客户端文章 API：通过 fetch 调用服务端 Route，数据真正持久化（跨浏览器/刷新可见）
+// 客户端文章 API：通过 fetch 调用服务端 Route，数据真正持久化（跨浏览器/刷新可见）
 import type { Post } from '@/lib/posts-store'
 
 export type { Post }
@@ -68,14 +68,16 @@ export async function deletePost(slug: string): Promise<void> {
  * 阅读量 +1：公开调用，无需鉴权。
  * 失败静默（不抛错），不影响读者继续阅读。
  */
-export async function incrementView(slug: string): Promise<Post | undefined> {
+// 阅读量 +1：接口只回传最新浏览数
+export async function incrementView(slug: string): Promise<number | undefined> {
   try {
     const res = await fetch(`/api/posts/${encodeURIComponent(slug)}/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })
     if (!res.ok) return undefined
-    return (await res.json()) as Post
+    const data = (await res.json()) as { views?: number }
+    return typeof data.views === 'number' ? data.views : undefined
   } catch {
     return undefined
   }

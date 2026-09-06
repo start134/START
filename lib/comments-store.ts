@@ -113,3 +113,18 @@ export async function getPendingCommentsCount(): Promise<number> {
 export async function getAllCommentsForAdmin(): Promise<Comment[]> {
   return readAllComments()
 }
+
+// 公开响应剥离邮箱：评论者邮箱只进管理端，不对访客暴露
+export type PublicComment = Omit<Comment, 'email'>
+
+export function toPublicComment(comment: Comment): PublicComment {
+  return {
+    id: comment.id,
+    postSlug: comment.postSlug,
+    parentId: comment.parentId,
+    name: comment.name,
+    content: comment.content,
+    createdAt: comment.createdAt,
+    status: comment.status,
+  }
+}

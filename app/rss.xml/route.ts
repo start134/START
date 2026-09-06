@@ -1,4 +1,4 @@
-import { readAllPosts } from '@/lib/posts-store'
+import { isPublishedPost, readAllPosts } from '@/lib/posts-store'
 import {
   SITE_URL,
   SITE_TITLE,
@@ -22,7 +22,8 @@ function cdata(s: string): string {
 }
 
 export async function GET() {
-  const posts = await readAllPosts()
+  // RSS 是公开输出，草稿绝不进入订阅源
+  const posts = (await readAllPosts()).filter(isPublishedPost)
   const buildDate = new Date().toUTCString()
 
   const items = posts
