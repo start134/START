@@ -64,7 +64,9 @@ npm run start   # 默认 3000 端口，可用 PORT 环境变量修改
 tar czf backup-$(date +%F).tgz data/
 ```
 
-管理后台「仪表盘 → 数据备份」也提供一键导出 / 导入（JSON）。
+系统自带**每日自动备份**：每天第一次有访客访问时，自动把全部数据打包到
+`data/backups/backup-YYYYMMDD-HHmmss.json`，保留最近 7 份。该目录也在 `data/` 下，
+随上面的命令一并备份。管理后台「仪表盘 → 数据备份」还提供手动一键导出 / 导入。
 
 **注意**：编辑器上传的图片保存在 `public/uploads/`，不在 `data/` 里，备份时一并处理：
 

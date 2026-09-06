@@ -5,7 +5,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useToast, type ToastVariant } from '@/components/toast'
 import { ContentWithToc } from '@/components/content-with-toc'
-import { createPost, updatePost, uploadImage, type Post } from '@/lib/posts'
+import { createPost, fetchPosts, updatePost, uploadImage, type Post } from '@/lib/posts'
+import { ApiError, errorMessage, isAuthError } from '@/lib/api-client'
 
 export type EditorStatus = 'draft' | 'published' | 'scheduled'
 
@@ -119,6 +120,27 @@ export function ArticleEditor({
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const submittedRef = useRef(false)
+
+  // 已有分类/标签：datalist 建议（可自由输入，但优先选已有的，避免拼错产生重复分类）
+  const [knownCategories, setKnownCategories] = useState<string[]>([])
+  const [knownTags, setKnownTags] = useState<string[]>([])
+
+  useEffect(() => {
+    fetchPosts()
+      .then((posts) => {
+        const cats = new Set<string>()
+        const tags = new Set<string>()
+        for (const p of posts) {
+          if (p.category) cats.add(p.category)
+          for (const tg of p.tags ?? []) tags.add(tg)
+        }
+        setKnownCategories(Array.from(cats).sort())
+        setKnownTags(Array.from(tags).sort())
+      })
+      .catch(() => {
+        // 拿不到已有分类也不影响写作
+      })
+  }, [])
 
   const showToast = useCallback(
     (variant: ToastVariant, input: { title: string; description?: string; durationMs?: number }) => {
@@ -307,6 +329,8 @@ export function ArticleEditor({
         form.status === 'scheduled' && form.publishAt
           ? new Date(form.publishAt).toISOString()
           : undefined,
+      // 乐观锁：带上加载时的版本号，其他窗口先保存过则服务端返回 409
+      ...(mode === 'edit' && post?.updatedAt ? { baseUpdatedAt: post.updatedAt } : {}),
     }
     try {
       submittedRef.current = true
@@ -330,13 +354,15 @@ export function ArticleEditor({
       setTimeout(() => router.push(`/articles/${saved.slug}`), 400)
     } catch (err) {
       submittedRef.current = false
-      let msg = err instanceof Error ? err.message : '保存失败'
-      if (msg.includes('401') || msg.includes('登录')) {
+      let msg = errorMessage(err, '保存失败')
+      if (isAuthError(err)) {
         msg = '登录已过期，请重新登录'
         setTimeout(() => router.replace(loginRedirect), 800)
+      } else if (err instanceof ApiError && err.status === 409) {
+        msg = '这篇文章已被其他窗口修改并保存，你的修改没有覆盖它。请刷新页面获取最新内容后再编辑。'
       }
       setError(msg)
-      showToast('error', { title: msg })
+      showToast('error', { title: msg, durationMs: 6000 })
       setSubmitting(false)
     }
   }
@@ -448,6 +474,7 @@ export function ArticleEditor({
             </label>
             <input
               id="category"
+              list="editor-category-list"
               value={form.category}
               onChange={(e) => {
                 setForm({ ...form, category: e.target.value })
@@ -456,6 +483,11 @@ export function ArticleEditor({
               placeholder="例如：设计 / 技术 / 生活"
               className={`${fieldClass} ${errors.category ? 'border-destructive' : ''}`}
             />
+            <datalist id="editor-category-list">
+              {knownCategories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
             {errors.category && <p className={errClass}>{errors.category}</p>}
           </div>
           <div className="grid gap-2">
@@ -464,6 +496,7 @@ export function ArticleEditor({
             </label>
             <input
               id="tags"
+              list="editor-tag-list"
               value={form.tags}
               onChange={(e) => {
                 setForm({ ...form, tags: e.target.value })
@@ -472,6 +505,11 @@ export function ArticleEditor({
               placeholder="例如：UI, 随笔, Next.js"
               className={`${fieldClass} ${errors.tags ? 'border-destructive' : ''}`}
             />
+            <datalist id="editor-tag-list">
+              {knownTags.map((tg) => (
+                <option key={tg} value={tg} />
+              ))}
+            </datalist>
             {errors.tags && <p className={errClass}>{errors.tags}</p>}
           </div>
         </div>

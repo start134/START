@@ -9,6 +9,7 @@ import {
   restorePost,
   type Post,
 } from '@/lib/posts'
+import { errorMessage, isAuthError } from '@/lib/api-client'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DailyStatsChart } from '@/components/daily-stats-chart'
 import { useToast } from '@/components/toast'
@@ -23,10 +24,17 @@ const TABS: { value: Tab; label: string }[] = [
   { value: 'trash', label: '回收站' },
 ]
 
+const PAGE_SIZE = 10
+
 export default function AdminArticles() {
   const [posts, setPosts] = useState<Post[]>([]) // 含回收站
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [tab, setTab] = useState<Tab>('all')
+  // 搜索 / 分类筛选 / 分页
+  const [searchQ, setSearchQ] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [page, setPage] = useState(1)
   const [deleteTarget, setDeleteTarget] = useState<{ slug: string; title: string } | null>(null)
   const [purgeTarget, setPurgeTarget] = useState<{ slug: string; title: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -34,9 +42,15 @@ export default function AdminArticles() {
   const t = useToast()
 
   const reload = async () => {
-    const p = await fetchPosts({ includeDeleted: true })
-    setPosts(p)
-    setLoading(false)
+    setLoadError('')
+    try {
+      const p = await fetchPosts({ includeDeleted: true })
+      setPosts(p)
+    } catch (err) {
+      setLoadError(errorMessage(err, '加载文章失败'))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -44,14 +58,44 @@ export default function AdminArticles() {
   }, [])
 
   const statusOf = (p: Post) => p.status ?? 'published'
-  const visiblePosts = useMemo(() => {
+  const activeByTab = useMemo(() => {
     const active = posts.filter((p) => !p.deletedAt)
     if (tab === 'trash') return posts.filter((p) => !!p.deletedAt)
     if (tab === 'all') return active
     return active.filter((p) => statusOf(p) === tab)
   }, [posts, tab])
 
-  const sortedPosts = [...visiblePosts].sort((a, b) => (a.date < b.date ? 1 : -1))
+  // 分类下拉选项（当前页签范围内）
+  const categories = useMemo(() => {
+    const seen = new Set<string>()
+    for (const p of activeByTab) {
+      if (p.category) seen.add(p.category)
+    }
+    return Array.from(seen).sort()
+  }, [activeByTab])
+
+  // 搜索 + 分类筛选
+  const searched = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    let out = activeByTab
+    if (categoryFilter) out = out.filter((p) => p.category === categoryFilter)
+    if (q) {
+      out = out.filter((p) =>
+        `${p.title}${p.category}${(p.tags ?? []).join(' ')}${p.slug}`.toLowerCase().includes(q)
+      )
+    }
+    return [...out].sort((a, b) => (a.date < b.date ? 1 : -1))
+  }, [activeByTab, searchQ, categoryFilter])
+
+  const totalPages = Math.max(1, Math.ceil(searched.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedPosts = searched.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  useEffect(() => {
+    setPage(1)
+  }, [tab, searchQ, categoryFilter])
+
+  const sortedPosts = pagedPosts
   const trashCount = posts.filter((p) => !!p.deletedAt).length
 
   const onDelete = async () => {
@@ -68,8 +112,8 @@ export default function AdminArticles() {
       )
       t.success({ title: '已移入回收站', description: `《${deleteTarget.title}》可在回收站恢复。` })
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '删除失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
+      let msg = errorMessage(err, '删除失败')
+      if (isAuthError(err)) msg = '登录已过期，请重新登录'
       t.error({ title: msg })
     } finally {
       setBusy(false)
@@ -90,8 +134,8 @@ export default function AdminArticles() {
       )
       t.success({ title: '已恢复', description: `《${post.title}》已从回收站恢复。` })
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '恢复失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
+      let msg = errorMessage(err, '恢复失败')
+      if (isAuthError(err)) msg = '登录已过期，请重新登录'
       t.error({ title: msg })
     }
   }
@@ -104,8 +148,8 @@ export default function AdminArticles() {
       setPosts((prev) => prev.filter((p) => p.slug !== purgeTarget.slug))
       t.success({ title: '已彻底删除', description: `《${purgeTarget.title}》已永久移除。` })
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '删除失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
+      let msg = errorMessage(err, '删除失败')
+      if (isAuthError(err)) msg = '登录已过期，请重新登录'
       t.error({ title: msg })
     } finally {
       setBusy(false)
@@ -173,19 +217,75 @@ export default function AdminArticles() {
         <div className="rounded-lg border border-border bg-card p-12 text-center text-muted-foreground">
           加载中...
         </div>
-      ) : sortedPosts.length === 0 ? (
+      ) : loadError ? (
+        <div className="rounded-lg border border-destructive/40 bg-card p-12 text-center">
+          <p className="text-destructive">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); reload() }}
+            className="mt-4 border border-border px-4 py-2 text-sm transition-colors hover:border-primary hover:text-primary"
+          >
+            重试
+          </button>
+        </div>
+      ) : searched.length === 0 ? (
         <div className="rounded-lg border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">
-            {tab === 'trash' ? '回收站是空的。' : '还没有符合条件的文章。'}
+            {tab === 'trash'
+              ? '回收站是空的。'
+              : searchQ || categoryFilter
+                ? '没有符合筛选条件的文章。'
+                : '还没有符合条件的文章。'}
           </p>
-          {tab !== 'trash' && (
+          {tab !== 'trash' && !searchQ && !categoryFilter && (
             <Link href="/admin/new" className="mt-4 inline-block text-primary hover:underline">
               去写第一篇
             </Link>
           )}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <>
+          {/* 搜索 + 分类筛选 */}
+          <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            <div className="flex w-full max-w-xs items-center gap-2 border-b border-border pb-1.5 text-muted-foreground focus-within:border-primary">
+              <span aria-hidden="true">⌕</span>
+              <input
+                value={searchQ}
+                onChange={(e) => setSearchQ(e.target.value)}
+                placeholder="搜索标题 / 标签 / 分类"
+                className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/60"
+                aria-label="搜索文章"
+              />
+              {searchQ && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQ('')}
+                  aria-label="清除搜索"
+                  className="text-xs hover:text-primary"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="按分类筛选"
+              className="border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground outline-none transition-colors hover:border-primary focus:border-primary"
+            >
+              <option value="">全部分类</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted-foreground">
+              共 {searched.length} 篇
+            </span>
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
           <table className="w-full">
             <thead className="border-b border-border bg-muted/50">
               <tr>
@@ -288,7 +388,33 @@ export default function AdminArticles() {
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+
+          {/* 分页 */}
+          {totalPages > 1 && (
+            <div className="mt-4 flex items-center justify-center gap-4 text-sm">
+              <button
+                type="button"
+                disabled={safePage <= 1}
+                onClick={() => setPage(safePage - 1)}
+                className="border border-border px-3 py-1.5 text-xs transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+              >
+                ← 上一页
+              </button>
+              <span className="text-xs text-muted-foreground">
+                第 {safePage} / {totalPages} 页
+              </span>
+              <button
+                type="button"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage(safePage + 1)}
+                className="border border-border px-3 py-1.5 text-xs transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+              >
+                下一页 →
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {deleteTarget && (

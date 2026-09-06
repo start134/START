@@ -11,6 +11,7 @@ const navItems = [
   { href: '/admin/articles', label: '文章管理', icon: '📝' },
   { href: '/admin/new', label: '写文章', icon: '✍️' },
   { href: '/admin/comments', label: '评论管理', icon: '💬' },
+  { href: '/admin/media', label: '媒体库', icon: '🖼️' },
   { href: '/admin/notifications', label: '通知', icon: '🔔' },
 ]
 

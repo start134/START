@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAuth } from '@/components/use-auth'
 import { useToast, type ToastVariant } from '@/components/toast'
 import { deletePost, fetchPosts, updatePost, type Post } from '@/lib/posts'
+import { errorMessage, isAuthError, isNotFound } from '@/lib/api-client'
 
 export const dynamic = 'force-dynamic'
 
@@ -158,9 +159,9 @@ function ArticlesContent() {
       setDeleting(false)
       setDeleteTarget(null)
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '删除失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
-      if (msg.includes('404') || msg.includes('未找到')) {
+      let msg = errorMessage(err, '删除失败')
+      if (isAuthError(err)) msg = '登录已过期，请重新登录'
+      if (isNotFound(err)) {
         msg = '文章不存在或已被删除'
         if (deleteTarget) {
           setPosts((prev) => prev.filter((p) => p.slug !== deleteTarget.slug))
@@ -186,8 +187,7 @@ function ArticlesContent() {
         description: `《${post.title}》${next === 'published' ? '已公开发布' : '已转为草稿'}`,
       })
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '切换失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
+      const msg = isAuthError(err) ? '登录已过期，请重新登录' : errorMessage(err, '切换失败')
       showToast('error', { title: msg })
     } finally {
       setToggling(null)

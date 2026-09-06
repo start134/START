@@ -61,3 +61,6 @@ build/
 # Misc
 .temp/
 .tmp/
+
+# 编辑器上传的图片（运行时数据，不进 git；部署时单独备份）
+public/uploads/

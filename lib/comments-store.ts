@@ -1,8 +1,10 @@
-import { readJSON, writeJSON } from '@/lib/storage'
+import { readJSON, writeJSON, withFileLock } from '@/lib/storage'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('comments-store')
 const COMMENTS_FILE = 'comments.json'
+// 与 storage.withFileLock 共用的锁键：串行化对评论的读改写事务
+const COMMENTS_LOCK_KEY = 'comments.json'
 
 export type Comment = {
   id: string
@@ -62,30 +64,68 @@ export async function createComment(input: CommentInput): Promise<Comment> {
     status: 'pending',
   }
 
-  const all = await readAllComments()
-  all.push(comment)
-  await writeJSON(COMMENTS_FILE, all)
+  await withFileLock(COMMENTS_LOCK_KEY, async () => {
+    const all = await readAllComments()
+    all.push(comment)
+    await writeJSON(COMMENTS_FILE, all)
+  })
   log.info('评论创建成功', { id: comment.id, postSlug: comment.postSlug })
   return comment
 }
 
 export async function approveComment(id: string): Promise<Comment | undefined> {
-  const all = await readAllComments()
-  const idx = all.findIndex(c => c.id === id)
-  if (idx < 0) return undefined
-  all[idx] = { ...all[idx], status: 'approved' }
-  await writeJSON(COMMENTS_FILE, all)
-  log.info('评论已批准', { id })
-  return all[idx]
+  return withFileLock(COMMENTS_LOCK_KEY, async () => {
+    const all = await readAllComments()
+    const idx = all.findIndex(c => c.id === id)
+    if (idx < 0) return undefined
+    all[idx] = { ...all[idx], status: 'approved' }
+    await writeJSON(COMMENTS_FILE, all)
+    log.info('评论已批准', { id })
+    return all[idx]
+  })
 }
 
 export async function deleteComment(id: string): Promise<boolean> {
-  const all = await readAllComments()
-  const next = all.filter(c => c.id !== id && c.parentId !== id)
-  if (next.length === all.length) return false
-  await writeJSON(COMMENTS_FILE, next)
-  log.info('评论已删除', { id })
-  return true
+  return withFileLock(COMMENTS_LOCK_KEY, async () => {
+    const all = await readAllComments()
+    const next = all.filter(c => c.id !== id && c.parentId !== id)
+    if (next.length === all.length) return false
+    await writeJSON(COMMENTS_FILE, next)
+    log.info('评论已删除', { id })
+    return true
+  })
+}
+
+/**
+ * 管理员回复：以博主身份回复某条评论，回复自动过审；
+ * 若目标评论还在待审，一并批准（管理员选择回复即代表认可）。
+ */
+export async function createAdminReply(input: {
+  parentId: string
+  author: string
+  content: string
+}): Promise<Comment | undefined> {
+  return withFileLock(COMMENTS_LOCK_KEY, async () => {
+    const all = await readAllComments()
+    const parent = all.find(c => c.id === input.parentId)
+    if (!parent) return undefined
+    const reply: Comment = {
+      id: generateId(),
+      postSlug: parent.postSlug,
+      parentId: parent.id,
+      name: input.author,
+      content: input.content.trim(),
+      createdAt: new Date().toISOString(),
+      status: 'approved',
+    }
+    const next = all.map(c =>
+      c.id === parent.id && c.status === 'pending' ? { ...c, status: 'approved' as const } : c
+    )
+    next.push(reply)
+    await writeJSON(COMMENTS_FILE, next)
+    log.info('管理员回复已创建', { id: reply.id, parent: parent.id })
+    return reply
+  })
 }
 
 export async function getCommentsWithReplies(postSlug: string): Promise<Comment[]> {

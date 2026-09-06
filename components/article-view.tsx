@@ -14,6 +14,7 @@ import {
 import { ReadingProgress } from '@/components/reading-progress'
 import { CommentList } from '@/components/comment-list'
 import { deletePost, incrementView, type Post } from '@/lib/posts'
+import { errorMessage, isAuthError, isNotFound } from '@/lib/api-client'
 
 const VIEW_DEDUP_MS = 5 * 60 * 1000 // 5 分钟内重复进入不重复计数
 
@@ -93,9 +94,9 @@ export function ArticleView({
       showToast('success', { title: '已删除', description: `《${title}》已移除。` })
       setTimeout(() => router.push('/articles'), 500)
     } catch (err) {
-      let msg = err instanceof Error ? err.message : '删除失败'
-      if (msg.includes('401') || msg.includes('登录')) msg = '登录已过期，请重新登录'
-      if (msg.includes('404') || msg.includes('未找到')) msg = '文章不存在或已被删除'
+      let msg = errorMessage(err, '删除失败')
+      if (isAuthError(err)) msg = '登录已过期，请重新登录'
+      if (isNotFound(err)) msg = '文章不存在或已被删除'
       setDeleting(false)
       setConfirmOpen(false)
       showToast('error', { title: msg })

@@ -7,6 +7,8 @@ import { fetchPosts, type Post } from '@/lib/posts'
 import { DailyStatsChart } from '@/components/daily-stats-chart'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useToast } from '@/components/toast'
+import { apiFetch, errorMessage, isAuthError } from '@/lib/api-client'
+import type { Comment } from '@/lib/comments-store'
 
 type DailyStat = {
   date: string
@@ -31,6 +33,18 @@ export default function AdminDashboard() {
   const importInputRef = useRef<HTMLInputElement>(null)
   const [importPayload, setImportPayload] = useState<{ summary: string; body: unknown } | null>(null)
   const [importing, setImporting] = useState(false)
+  // 待办：待审评论数 / 未读通知数
+  const [todoPending, setTodoPending] = useState(0)
+  const [todoUnread, setTodoUnread] = useState(0)
+
+  useEffect(() => {
+    apiFetch<{ unreadCount?: number }>('/api/notifications', { cache: 'no-store' })
+      .then((data) => setTodoUnread(data.unreadCount ?? 0))
+      .catch(() => {})
+    apiFetch<Comment[]>('/api/admin/comments', { cache: 'no-store' })
+      .then((data) => setTodoPending(Array.isArray(data) ? data.filter((c) => c.status === 'pending').length : 0))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetchPosts().then((p) => {
@@ -88,12 +102,31 @@ export default function AdminDashboard() {
   const totalPosts = posts.length
   const publishedPosts = posts.filter(p => (p.status ?? 'published') === 'published').length
   const draftPosts = posts.filter(p => (p.status ?? 'published') === 'draft').length
+  const scheduledPosts = posts.filter(p => p.status === 'scheduled').length
 
   const statCards = [
     { label: '总文章数', value: totalPosts, color: 'text-primary' },
     { label: '已发布', value: publishedPosts, color: 'text-green-500' },
     { label: '草稿', value: draftPosts, color: 'text-amber-500' },
+    { label: '定时发布', value: scheduledPosts, color: 'text-sky-500' },
     { label: '总阅读量', value: stats?.totalViews ?? 0, color: 'text-blue-500' },
+  ]
+
+  const todoCards = [
+    {
+      label: '待审评论',
+      value: todoPending,
+      href: '/admin/comments',
+      highlight: todoPending > 0,
+      desc: todoPending > 0 ? '有新评论等你审核' : '没有待处理的评论',
+    },
+    {
+      label: '未读通知',
+      value: todoUnread,
+      href: '/admin/notifications',
+      highlight: todoUnread > 0,
+      desc: todoUnread > 0 ? '有未读的站内通知' : '通知都看过了',
+    },
   ]
 
   const recentPosts = [...posts]
@@ -139,8 +172,8 @@ export default function AdminDashboard() {
       setImportPayload(null)
       setTimeout(() => router.refresh(), 600)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '导入失败'
-      t.error({ title: msg.includes('401') ? '登录已过期，请重新登录' : msg })
+      const msg = errorMessage(err, '导入失败')
+      t.error({ title: isAuthError(err) ? '登录已过期，请重新登录' : msg })
     } finally {
       setImporting(false)
     }
@@ -155,8 +188,33 @@ export default function AdminDashboard() {
         </p>
       </div>
 
+      {/* 待办：需要管理员处理的事 */}
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {todoCards.map((card) => (
+          <Link
+            key={card.label}
+            href={card.href}
+            className={`rounded-lg border p-6 transition-colors ${
+              card.highlight
+                ? 'border-amber-500/50 bg-amber-500/5 hover:border-amber-500'
+                : 'border-border bg-card hover:border-primary'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">{card.label}</p>
+              <p className={`text-2xl font-semibold ${card.highlight ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                {card.value}
+              </p>
+            </div>
+            <p className={`mt-2 text-xs ${card.highlight ? 'text-amber-500/90' : 'text-muted-foreground/70'}`}>
+              {card.desc}
+            </p>
+          </Link>
+        ))}
+      </div>
+
       {/* 统计卡片 */}
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {statCards.map((stat) => (
           <div
             key={stat.label}

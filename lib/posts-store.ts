@@ -1,9 +1,18 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { createLogger } from '@/lib/logger'
 import { withFileLock, writeFileAtomic } from '@/lib/storage'
 
 const log = createLogger('posts-store')
+
+/** 乐观锁冲突：文章在本次编辑期间已被其他窗口/请求修改 */
+export class PostConflictError extends Error {
+  constructor() {
+    super('文章已在其他窗口被修改，请刷新查看最新内容')
+    this.name = 'PostConflictError'
+  }
+}
 
 export type Post = {
   slug: string
@@ -22,6 +31,8 @@ export type Post = {
   publishAt?: string
   /** 软删除标记（回收站），ISO 字符串；存在即表示在回收站中 */
   deletedAt?: string
+  /** 最近一次内容修改时间（ISO），乐观锁版本号 */
+  updatedAt?: string
 }
 
 const DATA_DIR = path.join(process.cwd(), 'data')
@@ -185,6 +196,8 @@ export type PostInput = {
   status?: 'draft' | 'published' | 'scheduled'
   tags?: string[]
   publishAt?: string
+  /** 乐观锁版本号：API 层读取后通过 opts 传入，存储层本身忽略此字段 */
+  baseUpdatedAt?: string
 }
 
 async function writePosts(posts: Post[]): Promise<void> {
@@ -208,7 +221,8 @@ export async function createPost(input: PostInput): Promise<Post> {
         ? 'scheduled'
         : 'published'
   const post: Post = {
-    slug: `p-${Date.now().toString(36)}`,
+    // 随机后缀防碰撞：同毫秒连续创建也能区分（评论 ID 同款策略）
+    slug: `p-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`,
     date: today(),
     category: (input.category ?? '').trim() || '未分类',
     title,
@@ -216,6 +230,7 @@ export async function createPost(input: PostInput): Promise<Post> {
     content,
     read: estimateRead(content),
     status,
+    updatedAt: new Date().toISOString(),
     ...(tags ? { tags } : {}),
     ...(status === 'scheduled' && input.publishAt ? { publishAt: input.publishAt } : {}),
   }
@@ -229,7 +244,11 @@ export async function createPost(input: PostInput): Promise<Post> {
   return post
 }
 
-export async function updatePost(slug: string, input: PostInput): Promise<Post | undefined> {
+export async function updatePost(
+  slug: string,
+  input: PostInput,
+  opts?: { expectedUpdatedAt?: string }
+): Promise<Post | undefined> {
   return withFileLock(DATA_LOCK_KEY, async () => {
     const posts = await loadPostsForWrite()
     const idx = posts.findIndex((p) => p.slug === slug)
@@ -238,6 +257,15 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
       return undefined
     }
     const current = posts[idx]
+    // 乐观锁：编辑器保存时带上它读到的 updatedAt，不匹配说明已被其他窗口改过
+    if (
+      opts?.expectedUpdatedAt !== undefined &&
+      current.updatedAt !== undefined &&
+      current.updatedAt !== opts.expectedUpdatedAt
+    ) {
+      log.warn('更新冲突：文章已被其他窗口修改', { slug })
+      throw new PostConflictError()
+    }
     const content = input.content !== undefined ? input.content.trim() : current.content
     const title = input.title !== undefined ? input.title.trim() || '无题' : current.title
     const nextStatus = input.status !== undefined ? input.status : (current.status ?? 'published')
@@ -255,6 +283,7 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
       read: input.content !== undefined ? estimateRead(content) : current.read,
       status: nextStatus,
       tags: input.tags !== undefined ? normalizeTags(input.tags) : current.tags,
+      updatedAt: new Date().toISOString(),
       ...(publishAt !== undefined ? { publishAt } : {}),
     }
     if (publishAt === undefined) delete updated.publishAt

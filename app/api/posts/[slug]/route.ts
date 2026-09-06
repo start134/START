@@ -4,11 +4,12 @@ import { isAuthenticatedRequest } from '@/lib/auth'
 import {
   deletePost,
   isPublishedPost,
+  PostConflictError,
   purgePost,
   readPost,
   updatePost,
-  type PostInput,
 } from '@/lib/posts-store'
+import { validatePostInput } from '@/lib/validation'
 
 const log = createLogger('api/posts/[slug]')
 
@@ -49,15 +50,23 @@ export async function PATCH(request: NextRequest, ctx: Ctx) {
   log.debug('收到请求：PATCH /api/posts/[slug]', { slug })
   const authErr = await requireAuth()
   if (authErr) return authErr
-  let body: PostInput
+  let body: unknown
   try {
-    body = (await request.json()) as PostInput
+    body = await request.json()
   } catch (err) {
     log.warn('PATCH 请求体解析失败', { slug, error: String(err) })
     return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 })
   }
+  const result = validatePostInput(body, 'update')
+  if (!result.ok) {
+    log.warn('PATCH 参数校验失败', { slug, error: result.error })
+    return NextResponse.json({ error: result.error }, { status: 400 })
+  }
   try {
-    const updated = await updatePost(slug, body)
+    // 乐观锁：baseUpdatedAt 不匹配时抛 PostConflictError → 409
+    const updated = await updatePost(slug, result.value, {
+      expectedUpdatedAt: result.value.baseUpdatedAt,
+    })
     if (!updated) {
       log.warn('响应：PATCH 未找到文章，返回 404', { slug })
       return NextResponse.json({ error: '文章不存在' }, { status: 404 })
@@ -65,6 +74,9 @@ export async function PATCH(request: NextRequest, ctx: Ctx) {
     log.info('响应：PATCH 文章更新成功', { slug, title: updated.title, postStatus: updated.status })
     return NextResponse.json(updated)
   } catch (err) {
+    if (err instanceof PostConflictError) {
+      return NextResponse.json({ error: err.message }, { status: 409 })
+    }
     log.error('PATCH /api/posts/[slug] 处理失败', { slug, error: String(err) })
     return NextResponse.json({ error: '更新失败' }, { status: 500 })
   }
