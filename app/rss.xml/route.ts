@@ -1,4 +1,4 @@
-import { isPublishedPost, readAllPosts } from '@/lib/posts-store'
+import { isPublishedPost, promoteScheduledPosts, readAllPosts } from '@/lib/posts-store'
 import {
   SITE_URL,
   SITE_TITLE,
@@ -22,8 +22,13 @@ function cdata(s: string): string {
 }
 
 export async function GET() {
-  // RSS 是公开输出，草稿绝不进入订阅源
-  const posts = (await readAllPosts()).filter(isPublishedPost)
+  // 顺手把到点的定时文章转正，再输出公开订阅源（草稿/未到点定时文绝不出现）
+  try {
+    await promoteScheduledPosts()
+  } catch {
+    // 提升失败不阻塞 RSS 输出
+  }
+  const posts = (await readAllPosts()).filter((p) => isPublishedPost(p))
   const buildDate = new Date().toUTCString()
 
   const items = posts

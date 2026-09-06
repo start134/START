@@ -14,7 +14,14 @@ export type Post = {
   content: string
   read: string
   views?: number
-  status?: 'draft' | 'published'
+  /** draft 草稿 / published 已发布 / scheduled 定时发布（到点由 promoteScheduledPosts 转正） */
+  status?: 'draft' | 'published' | 'scheduled'
+  /** 标签（可多个，与单一分类互补） */
+  tags?: string[]
+  /** 定时发布时间（ISO 字符串），仅 status === 'scheduled' 时有意义 */
+  publishAt?: string
+  /** 软删除标记（回收站），ISO 字符串；存在即表示在回收站中 */
+  deletedAt?: string
 }
 
 const DATA_DIR = path.join(process.cwd(), 'data')
@@ -96,8 +103,21 @@ async function ensureFile(): Promise<void> {
   }
 }
 
-export function isPublishedPost(post: Post): boolean {
-  return (post.status ?? 'published') === 'published'
+/** 对公众是否可见：published 直接可见；scheduled 到点后可见（转正前的窗口期） */
+export function isPublishedPost(post: Post, now: Date = new Date()): boolean {
+  const status = post.status ?? 'published'
+  if (status === 'published') return true
+  if (status === 'scheduled') {
+    return !!post.publishAt && new Date(post.publishAt).getTime() <= now.getTime()
+  }
+  return false
+}
+
+/** tags 规范化：去空、去重、限量 8 个、单个限长 20；空数组返回 undefined 便于清空字段 */
+function normalizeTags(tags: unknown): string[] | undefined {
+  if (!Array.isArray(tags)) return undefined
+  const cleaned = Array.from(new Set(tags.map((t) => String(t).trim()).filter(Boolean)))
+  return cleaned.length > 0 ? cleaned.slice(0, 8).map((t) => t.slice(0, 20)) : undefined
 }
 
 // 供写入路径使用：文件损坏/不可读时抛错，绝不拿种子数据回写覆盖真实文章
@@ -116,9 +136,13 @@ async function loadPostsForWrite(): Promise<Post[]> {
   return sortByDateDesc(parsed)
 }
 
-export async function readAllPosts(): Promise<Post[]> {
+export async function readAllPosts(
+  opts?: { includeDeleted?: boolean }
+): Promise<Post[]> {
   try {
-    return await loadPostsForWrite()
+    const posts = await loadPostsForWrite()
+    // 回收站文章默认不出现在任何读取路径，只有管理端显式要求才返回
+    return opts?.includeDeleted ? posts : posts.filter((p) => !p.deletedAt)
   } catch (err) {
     log.warn('读取数据文件失败，使用种子数据（仅用于展示，不会回写）', { error: String(err) })
     return sortByDateDesc(seedPosts)
@@ -136,12 +160,15 @@ export async function readPost(slug: string): Promise<Post | undefined> {
   return found
 }
 
-function today(): string {
-  const d = new Date()
+function formatDateYMD(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}.${m}.${day}`
+}
+
+function today(): string {
+  return formatDateYMD(new Date())
 }
 
 function estimateRead(content: string): string {
@@ -155,7 +182,9 @@ export type PostInput = {
   category?: string
   excerpt?: string
   content?: string
-  status?: 'draft' | 'published'
+  status?: 'draft' | 'published' | 'scheduled'
+  tags?: string[]
+  publishAt?: string
 }
 
 async function writePosts(posts: Post[]): Promise<void> {
@@ -171,6 +200,13 @@ async function writePosts(posts: Post[]): Promise<void> {
 export async function createPost(input: PostInput): Promise<Post> {
   const content = (input.content ?? '').trim()
   const title = (input.title ?? '').trim() || '无题'
+  const tags = normalizeTags(input.tags)
+  const status =
+    input.status === 'draft'
+      ? 'draft'
+      : input.status === 'scheduled'
+        ? 'scheduled'
+        : 'published'
   const post: Post = {
     slug: `p-${Date.now().toString(36)}`,
     date: today(),
@@ -179,9 +215,11 @@ export async function createPost(input: PostInput): Promise<Post> {
     excerpt: (input.excerpt ?? '').trim() || content.slice(0, 60),
     content,
     read: estimateRead(content),
-    status: input.status === 'draft' ? 'draft' : 'published',
+    status,
+    ...(tags ? { tags } : {}),
+    ...(status === 'scheduled' && input.publishAt ? { publishAt: input.publishAt } : {}),
   }
-  log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category })
+  log.info('准备创建文章', { slug: post.slug, title: post.title, category: post.category, status })
   await withFileLock(DATA_LOCK_KEY, async () => {
     const posts = await loadPostsForWrite()
     posts.unshift(post)
@@ -202,6 +240,12 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
     const current = posts[idx]
     const content = input.content !== undefined ? input.content.trim() : current.content
     const title = input.title !== undefined ? input.title.trim() || '无题' : current.title
+    const nextStatus = input.status !== undefined ? input.status : (current.status ?? 'published')
+    // 定时发布保留/更新 publishAt；转草稿或直接发布则清除定时字段
+    const publishAt =
+      nextStatus === 'scheduled'
+        ? (input.publishAt ?? current.publishAt)
+        : undefined
     const updated: Post = {
       ...current,
       title,
@@ -209,11 +253,14 @@ export async function updatePost(slug: string, input: PostInput): Promise<Post |
       excerpt: input.excerpt !== undefined ? input.excerpt.trim() || content.slice(0, 60) : current.excerpt,
       content,
       read: input.content !== undefined ? estimateRead(content) : current.read,
-      status: input.status !== undefined ? input.status : (current.status ?? 'published'),
+      status: nextStatus,
+      tags: input.tags !== undefined ? normalizeTags(input.tags) : current.tags,
+      ...(publishAt !== undefined ? { publishAt } : {}),
     }
+    if (publishAt === undefined) delete updated.publishAt
     posts[idx] = updated
     await writePosts(posts)
-    log.info('文章更新成功', { slug, title: updated.title })
+    log.info('文章更新成功', { slug, title: updated.title, status: updated.status })
     return updated
   })
 }
@@ -243,7 +290,7 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
     // 每日统计失败不影响阅读量主流程
     try {
       const { incrementTodayViews } = await import('@/lib/kv-stats')
-      await incrementTodayViews()
+      await incrementTodayViews(slug)
     } catch (err) {
       log.warn('每日统计写入失败', { slug, error: String(err) })
     }
@@ -253,7 +300,7 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
 
 export async function getAdjacentPosts(slug: string): Promise<{ prev?: Post; next?: Post }> {
   const posts = await readAllPosts()
-  const published = posts.filter(isPublishedPost)
+  const published = posts.filter((p) => !p.deletedAt && isPublishedPost(p))
   const idx = published.findIndex((p) => p.slug === slug)
   if (idx < 0) return {}
   const prev = idx + 1 < published.length ? published[idx + 1] : undefined
@@ -261,13 +308,86 @@ export async function getAdjacentPosts(slug: string): Promise<{ prev?: Post; nex
   return { prev, next }
 }
 
+/** 相关文章：同分类、公开可见、排除自身与回收站，取最新 3 篇 */
+export async function getRelatedPosts(slug: string, limit = 3): Promise<Post[]> {
+  const posts = await readAllPosts()
+  const current = posts.find((p) => p.slug === slug)
+  if (!current) return []
+  return posts
+    .filter((p) => p.slug !== slug && !p.deletedAt && isPublishedPost(p))
+    .filter((p) => p.category === current.category)
+    .slice(0, limit)
+}
+
+/** 删除 → 移入回收站（软删除）；已在回收站返回 false */
 export async function deletePost(slug: string): Promise<boolean> {
   return withFileLock(DATA_LOCK_KEY, async () => {
     const posts = await loadPostsForWrite()
-    const next = posts.filter((p) => p.slug !== slug)
-    if (next.length === posts.length) return false
-    await writePosts(next)
-    log.info('文章删除成功', { slug, remaining: next.length })
+    const idx = posts.findIndex((p) => p.slug === slug)
+    if (idx < 0 || posts[idx].deletedAt) return false
+    posts[idx] = { ...posts[idx], deletedAt: new Date().toISOString() }
+    await writePosts(posts)
+    log.info('文章已移入回收站', { slug })
     return true
   })
+}
+
+/** 从回收站恢复 */
+export async function restorePost(slug: string): Promise<Post | undefined> {
+  return withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    const idx = posts.findIndex((p) => p.slug === slug)
+    if (idx < 0 || !posts[idx].deletedAt) return undefined
+    const restored: Post = { ...posts[idx] }
+    delete restored.deletedAt
+    posts[idx] = restored
+    await writePosts(posts)
+    log.info('文章已从回收站恢复', { slug })
+    return restored
+  })
+}
+
+/** 彻底删除（仅限回收站中的文章） */
+export async function purgePost(slug: string): Promise<boolean> {
+  return withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    const next = posts.filter((p) => !(p.slug === slug && p.deletedAt))
+    if (next.length === posts.length) return false
+    await writePosts(next)
+    log.info('文章已彻底删除', { slug, remaining: next.length })
+    return true
+  })
+}
+
+/**
+ * 定时发布懒提升：把到点的 scheduled 文章转成 published（date 取发布日）。
+ * 在文章页 / 文章列表 API / RSS / sitemap 等读取路径上调用；无到点文章时只读不写，幂等。
+ */
+export async function promoteScheduledPosts(): Promise<number> {
+  const now = Date.now()
+  const all = await readAllPosts({ includeDeleted: true })
+  const hasDue = all.some(
+    (p) => p.status === 'scheduled' && !!p.publishAt && new Date(p.publishAt).getTime() <= now
+  )
+  if (!hasDue) return 0
+  let promoted = 0
+  await withFileLock(DATA_LOCK_KEY, async () => {
+    const posts = await loadPostsForWrite()
+    for (let i = 0; i < posts.length; i++) {
+      const p = posts[i]
+      if (p.status === 'scheduled' && p.publishAt && new Date(p.publishAt).getTime() <= now) {
+        posts[i] = {
+          ...p,
+          status: 'published',
+          date: formatDateYMD(new Date(p.publishAt)),
+          publishAt: undefined,
+        }
+        delete posts[i].publishAt
+        promoted++
+      }
+    }
+    await writePosts(posts)
+  })
+  if (promoted > 0) log.info('定时文章已到点发布', { count: promoted })
+  return promoted
 }

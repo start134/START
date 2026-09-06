@@ -16,6 +16,7 @@ function ArticlesContent() {
   const [posts, setPosts] = useState<Post[]>([])
   const [query, setQuery] = useState(sp.get('q') ?? '')
   const [category, setCategory] = useState<string>(sp.get('category') ?? '')
+  const [tag, setTag] = useState<string>(sp.get('tag') ?? '')
   const [sort, setSort] = useState<'date' | 'read'>(
     sp.get('sort') === 'read' ? 'read' : 'date'
   )
@@ -51,18 +52,21 @@ function ArticlesContent() {
   useEffect(() => {
     const nextQ = sp.get('q') ?? ''
     const nextCat = sp.get('category') ?? ''
+    const nextTag = sp.get('tag') ?? ''
     const nextSort: 'date' | 'read' = sp.get('sort') === 'read' ? 'read' : 'date'
     if (nextQ !== query) setQuery(nextQ)
     if (nextCat !== category) setCategory(nextCat)
+    if (nextTag !== tag) setTag(nextTag)
     if (nextSort !== sort) setSort(nextSort)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sp])
 
-  const syncUrl = (next: { q?: string; category?: string; sort?: 'date' | 'read' }) => {
+  const syncUrl = (next: { q?: string; category?: string; tag?: string; sort?: 'date' | 'read' }) => {
     const params = new URLSearchParams(window.location.search)
     const apply: Record<string, string | undefined> = {
       q: query,
       category,
+      tag,
       sort: sort === 'date' ? undefined : sort, // 默认排序不写进 URL，保持链接干净
       ...next,
     }
@@ -97,13 +101,27 @@ function ArticlesContent() {
     return list
   }, [visiblePosts, category])
 
+  // 所有已出现的标签，按使用频次降序（同频按首次出现顺序）
+  const tags = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of visiblePosts) {
+      for (const tg of p.tags ?? []) {
+        counts.set(tg, (counts.get(tg) ?? 0) + 1)
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tg]) => tg)
+  }, [visiblePosts])
+
   const filteredSorted = useMemo(() => {
     const q = query.trim().toLowerCase()
     let out = visiblePosts
     if (category) out = out.filter((p) => p.category === category)
+    if (tag) out = out.filter((p) => (p.tags ?? []).includes(tag))
     if (q) {
       out = out.filter((p) =>
-        `${p.title}${p.excerpt}${p.category}`.toLowerCase().includes(q)
+        `${p.title}${p.excerpt}${p.category}${(p.tags ?? []).join(' ')}`.toLowerCase().includes(q)
       )
     }
     const sorted = [...out]
@@ -121,7 +139,7 @@ function ArticlesContent() {
       sorted.sort((a, b) => (a.date < b.date ? 1 : -1))
     }
     return sorted
-  }, [visiblePosts, query, category, sort])
+  }, [visiblePosts, query, category, tag, sort])
 
   const sortLabel: Record<'date' | 'read', string> = { date: '最新发布', read: '最多阅读' }
 
@@ -291,6 +309,32 @@ function ArticlesContent() {
         </div>
       )}
 
+      {tags.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted-foreground">标签：</span>
+          {tags.map((tg) => {
+            const active = tg === tag
+            return (
+              <button
+                type="button"
+                key={tg}
+                onClick={() => {
+                  setTag(active ? '' : tg)
+                  syncUrl({ tag: active ? '' : tg })
+                }}
+                className={
+                  active
+                    ? 'border border-primary bg-primary/10 px-3 py-1.5 text-primary transition-colors'
+                    : 'border border-border px-3 py-1.5 text-muted-foreground transition-colors hover:border-primary hover:text-primary'
+                }
+              >
+                #{tg}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* 排序 chip */}
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted-foreground">排序：</span>
@@ -316,10 +360,11 @@ function ArticlesContent() {
         })}
       </div>
 
-      {!loading && (category || query || sort !== 'date') && (
+      {!loading && (category || tag || query || sort !== 'date') && (
         <p className="mt-6 text-xs text-muted-foreground">
           共找到 {filteredSorted.length} 篇 · 排序「{sortLabel[sort]}」
           {category ? <> · 分类「<span className="text-primary">{category}</span>」</> : null}
+          {tag ? <> · 标签「<span className="text-primary">#{tag}</span>」</> : null}
           {query ? <> · 关键词「<span className="text-foreground">{query}</span>」</> : null}
         </p>
       )}
@@ -330,7 +375,7 @@ function ArticlesContent() {
         ) : filteredSorted.length === 0 ? (
           <p className="py-10 text-sm text-muted-foreground">
             没有找到相关文章。
-            {(query || category || sort !== 'date') && (
+            {(query || category || tag || sort !== 'date') && (
               <>
                 {' '}
                 <button
@@ -338,8 +383,9 @@ function ArticlesContent() {
                   onClick={() => {
                     setQuery('')
                     setCategory('')
+                    setTag('')
                     setSort('date')
-                    syncUrl({ q: '', category: '', sort: 'date' })
+                    syncUrl({ q: '', category: '', tag: '', sort: 'date' })
                   }}
                   className="text-primary hover:underline"
                 >

@@ -118,6 +118,20 @@ export async function POST(request: NextRequest) {
       log.warn('通知创建失败（不影响评论）', { error: String(notifErr) })
     }
 
+    // 站外推送（Bark / Server酱 / 邮件），失败同样不影响评论
+    try {
+      const { pushCommentNotification } = await import('@/lib/push')
+      await pushCommentNotification({
+        type: parentId ? 'reply' : 'comment',
+        postTitle: post.title,
+        postSlug,
+        commenter: name?.trim() || '匿名',
+        content: content.trim(),
+      })
+    } catch (pushErr) {
+      log.warn('评论推送失败（不影响评论）', { error: String(pushErr) })
+    }
+
     log.info('评论创建成功', { id: comment.id, postSlug })
     return NextResponse.json(toPublicComment(comment), { status: 201 })
   } catch (err) {

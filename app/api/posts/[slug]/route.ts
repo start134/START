@@ -4,6 +4,7 @@ import { isAuthenticatedRequest } from '@/lib/auth'
 import {
   deletePost,
   isPublishedPost,
+  purgePost,
   readPost,
   updatePost,
   type PostInput,
@@ -69,18 +70,21 @@ export async function PATCH(request: NextRequest, ctx: Ctx) {
   }
 }
 
-export async function DELETE(_request: NextRequest, ctx: Ctx) {
+export async function DELETE(request: NextRequest, ctx: Ctx) {
   const { slug } = await ctx.params
-  log.debug('收到请求：DELETE /api/posts/[slug]', { slug })
+  // 默认软删除（进回收站）；?purge=1 彻底删除（仅回收站文章）
+  const purge = request.nextUrl.searchParams.get('purge') === '1'
+  log.debug('收到请求：DELETE /api/posts/[slug]', { slug, purge })
   const authErr = await requireAuth()
   if (authErr) return authErr
   try {
-    const ok = await deletePost(slug)
+    const ok = purge ? await purgePost(slug) : await deletePost(slug)
     if (!ok) {
-      log.warn('响应：DELETE 未找到文章，返回 404', { slug })
+      const message = purge ? '文章不在回收站中' : '文章不存在'
+      log.warn('响应：DELETE 未生效', { slug, purge, message })
       return NextResponse.json({ error: '文章不存在' }, { status: 404 })
     }
-    log.info('响应：DELETE 删除成功，返回 204', { slug })
+    log.info('响应：DELETE 成功', { slug, purge })
     return new NextResponse(null, { status: 204 })
   } catch (err) {
     log.error('DELETE /api/posts/[slug] 处理失败', { slug, error: String(err) })

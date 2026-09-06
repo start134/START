@@ -42,6 +42,11 @@ npm run build
 | `ADMIN_PASSWORD` | **生产必填** | 管理员登录密码。生产环境未配置时登录接口直接返回 503，不存在默认密码回退 |
 | `NEXT_PUBLIC_SITE_URL` | 建议 | 如 `https://yourblog.com`，用于 sitemap / RSS / OG 卡片的 URL 拼接 |
 | `SESSION_SECRET` | 可选 | 会话签名密钥；不设置时从 `ADMIN_PASSWORD` 派生 |
+| `BARK_URL` | 可选 | iOS Bark 推送地址（含 Key），有新评论时推送 |
+| `SERVERCHAN_SENDKEY` | 可选 | Server酱 SendKey，微信收到新评论推送 |
+| `RESEND_API_KEY` + `NOTIFY_EMAIL` | 可选 | Resend 邮件通知；`NOTIFY_FROM` 可自定义发件人 |
+
+推送渠道按需配置（可多选），全部不配置时评论只进站内通知，不影响功能。
 
 ### 4. 启动
 
@@ -59,7 +64,13 @@ npm run start   # 默认 3000 端口，可用 PORT 环境变量修改
 tar czf backup-$(date +%F).tgz data/
 ```
 
-建议加入定时任务定期备份。
+管理后台「仪表盘 → 数据备份」也提供一键导出 / 导入（JSON）。
+
+**注意**：编辑器上传的图片保存在 `public/uploads/`，不在 `data/` 里，备份时一并处理：
+
+```bash
+tar czf backup-full-$(date +%F).tgz data/ public/uploads/
+```
 
 ## 本地开发
 

@@ -7,11 +7,16 @@ export type PostInput = {
   category?: string
   excerpt?: string
   content?: string
-  status?: 'draft' | 'published'
+  status?: 'draft' | 'published' | 'scheduled'
+  tags?: string[]
+  publishAt?: string
 }
 
-export async function fetchPosts(): Promise<Post[]> {
-  const res = await fetch('/api/posts', { cache: 'no-store' })
+export async function fetchPosts(
+  opts?: { includeDeleted?: boolean }
+): Promise<Post[]> {
+  const qs = opts?.includeDeleted ? '?includeDeleted=1' : ''
+  const res = await fetch(`/api/posts${qs}`, { cache: 'no-store' })
   if (!res.ok) return []
   const data = (await res.json()) as Post[]
   return Array.isArray(data) ? data : []
@@ -54,6 +59,7 @@ export async function updatePost(
   return (await res.json()) as Post
 }
 
+/** 删除 → 移入回收站（软删除，可在管理后台恢复） */
 export async function deletePost(slug: string): Promise<void> {
   const res = await fetch(`/api/posts/${encodeURIComponent(slug)}`, {
     method: 'DELETE',
@@ -64,11 +70,47 @@ export async function deletePost(slug: string): Promise<void> {
   }
 }
 
+/** 从回收站恢复文章 */
+export async function restorePost(slug: string): Promise<Post> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(slug)}/restore`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: '恢复失败' }))
+    throw new Error((err as { error?: string }).error || '恢复失败')
+  }
+  return (await res.json()) as Post
+}
+
+/** 彻底删除（回收站中的文章，不可恢复） */
+export async function purgePost(slug: string): Promise<void> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(slug)}?purge=1`, {
+    method: 'DELETE',
+  })
+  if (!res.ok && res.status !== 204) {
+    const err = await res.json().catch(() => ({ error: '删除失败' }))
+    throw new Error((err as { error?: string }).error || '删除失败')
+  }
+}
+
+/** 上传插图：返回可直接嵌入 Markdown 的 /uploads/... URL */
+export async function uploadImage(file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/admin/upload', { method: 'POST', body: form })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: '图片上传失败' }))
+    throw new Error((err as { error?: string }).error || '图片上传失败')
+  }
+  const data = (await res.json()) as { url?: string }
+  if (!data.url) throw new Error('图片上传失败：响应缺少 URL')
+  return data.url
+}
+
 /**
  * 阅读量 +1：公开调用，无需鉴权。
- * 失败静默（不抛错），不影响读者继续阅读。
+ * 失败静默（不抛错），不影响读者继续阅读。接口只回传最新浏览数。
  */
-// 阅读量 +1：接口只回传最新浏览数
 export async function incrementView(slug: string): Promise<number | undefined> {
   try {
     const res = await fetch(`/api/posts/${encodeURIComponent(slug)}/view`, {

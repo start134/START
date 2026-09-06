@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDailyStats, getTotalViews } from '@/lib/kv-stats'
+import { getArticleDailyStats, getDailyStats, getTotalViews } from '@/lib/kv-stats'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('api/stats')
@@ -7,16 +7,24 @@ const log = createLogger('api/stats')
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const days = parseInt(searchParams.get('days') ?? '30', 10)
-  
+  const slug = searchParams.get('slug')
+
   // 限制范围 7-90 天
   const safeDays = Math.max(7, Math.min(90, days))
-  
+
   log.debug('统计 API 被请求', {
     requestedDays: days,
     safeDays,
+    slug,
   })
-  
+
   try {
+    // 单篇模式：返回某篇文章的每日阅读量（管理端趋势图）
+    if (slug) {
+      const daily = await getArticleDailyStats(slug, safeDays)
+      return NextResponse.json({ slug, days: safeDays, daily })
+    }
+
     const startTime = performance.now()
     const [daily, totalViews] = await Promise.all([
       getDailyStats(safeDays),

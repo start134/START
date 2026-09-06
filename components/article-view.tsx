@@ -21,10 +21,12 @@ export function ArticleView({
   post: initialPost,
   prev,
   next,
+  related = [],
 }: {
   post: Post
   prev?: Post
   next?: Post
+  related?: Post[]
 }) {
   const slug = initialPost.slug
   const router = useRouter()
@@ -133,6 +135,21 @@ export function ArticleView({
           </h1>
           <p className="mt-4 text-base leading-7 text-muted-foreground">{post.excerpt}</p>
 
+          {/* 标签 */}
+          {(post.tags?.length ?? 0) > 0 && (
+            <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
+              {post.tags!.map((tag) => (
+                <Link
+                  key={tag}
+                  href={`/articles?tag=${encodeURIComponent(tag)}`}
+                  className="border border-border px-2.5 py-1 text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                >
+                  #{tag}
+                </Link>
+              ))}
+            </div>
+          )}
+
           {/* 移动端 / 平板：inline 折叠目录（<lg） */}
           {headings.length > 0 && (
             <div className="mt-8 border border-border lg:hidden">
@@ -225,6 +242,30 @@ export function ArticleView({
               查看全部文章 →
             </Link>
           </div>
+
+          {/* 相关文章（同分类） */}
+          {related.length > 0 && (
+            <div className="mt-8 border-t border-border pt-8">
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">
+                相关文章
+              </p>
+              <ul className="mt-4 grid gap-3 sm:grid-cols-3">
+                {related.map((r) => (
+                  <li key={r.slug}>
+                    <Link
+                      href={`/articles/${r.slug}`}
+                      className="group block border border-border p-4 transition-colors hover:border-primary"
+                    >
+                      <span className="block text-xs text-muted-foreground">{r.date}</span>
+                      <span className="mt-2 block text-sm leading-6 transition-colors group-hover:text-primary">
+                        {r.title}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* 上一篇 / 下一篇 */}
           {(prev || next) && (

@@ -45,8 +45,46 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* 站点统一为暗色主题，单一来源，避免 :root 与 .dark 互相覆盖 */
+/* 双主题：默认暗色（html.dark），亮色作为可切换选项。
+   html 上默认带 .dark；ThemeToggle 读写 localStorage('start:theme') 并切换 class，
+   layout 中的内联脚本在首帧前应用，避免闪白/闪黑。 */
 :root {
+  color-scheme: light;
+  --background: oklch(0.985 0.003 260);
+  --foreground: oklch(0.22 0.02 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.02 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.02 255);
+  --primary: oklch(0.55 0.11 210);
+  --primary-foreground: oklch(0.99 0.005 210);
+  --secondary: oklch(0.95 0.006 255);
+  --secondary-foreground: oklch(0.3 0.02 255);
+  --muted: oklch(0.95 0.006 255);
+  --muted-foreground: oklch(0.5 0.02 255);
+  --accent: oklch(0.93 0.04 200);
+  --accent-foreground: oklch(0.32 0.05 210);
+  --destructive: oklch(0.55 0.22 25);
+  --border: oklch(0.22 0.02 255 / 13%);
+  --input: oklch(0.22 0.02 255 / 16%);
+  --ring: oklch(0.55 0.11 210);
+  --chart-1: oklch(0.45 0 0);
+  --chart-2: oklch(0.62 0 0);
+  --chart-3: oklch(0.75 0 0);
+  --chart-4: oklch(0.85 0 0);
+  --chart-5: oklch(0.92 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.22 0.02 255);
+  --sidebar-primary: oklch(0.55 0.11 210);
+  --sidebar-primary-foreground: oklch(0.99 0.005 210);
+  --sidebar-accent: oklch(0.93 0.04 200);
+  --sidebar-accent-foreground: oklch(0.32 0.05 210);
+  --sidebar-border: oklch(0.22 0.02 255 / 13%);
+  --sidebar-ring: oklch(0.55 0.11 210);
+}
+
+.dark {
   color-scheme: dark;
   --background: oklch(0.11 0.015 260);
   --foreground: oklch(0.94 0.015 250);

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { NowClock } from '@/components/now-clock'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { useAuth } from '@/components/use-auth'
 import { useToast } from '@/components/toast'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -11,6 +12,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 const links = [
   { href: '/', label: '首页' },
   { href: '/articles', label: '文章' },
+  { href: '/archive', label: '归档' },
   { href: '/about', label: '关于' },
   { href: '/contact', label: '联系' },
 ]
@@ -136,6 +138,7 @@ export function SiteNav() {
               </button>
             </>
           ) : null}
+          <ThemeToggle className="text-base leading-none" />
         </nav>
 
         {/* 移动端汉堡按钮 */}
@@ -221,6 +224,9 @@ export function SiteNav() {
                   </button>
                 </>
               ) : null}
+              <div className="border-b border-border py-4">
+                <ThemeToggle className="text-base" />
+              </div>
             </nav>
           </div>
         </div>

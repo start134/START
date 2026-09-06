@@ -1,7 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createLogger } from '@/lib/logger'
 import { isAuthenticatedRequest } from '@/lib/auth'
-import { createPost, isPublishedPost, readAllPosts, type PostInput } from '@/lib/posts-store'
+import {
+  createPost,
+  isPublishedPost,
+  promoteScheduledPosts,
+  readAllPosts,
+  type PostInput,
+} from '@/lib/posts-store'
 
 const log = createLogger('api/posts')
 
@@ -13,14 +19,21 @@ async function requireAuth(): Promise<NextResponse | null> {
   return null
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   log.debug('收到请求：GET /api/posts')
   try {
-    const posts = await readAllPosts()
-    // 草稿只对管理员可见：未登录请求一律过滤，避免草稿内容被拉到客户端
-    const visible = (await isAuthenticatedRequest())
-      ? posts
-      : posts.filter(isPublishedPost)
+    // 顺手把到点的定时文章转正（无到点文章时是纯读操作）
+    try {
+      await promoteScheduledPosts()
+    } catch (err) {
+      log.warn('定时文章提升失败', { error: String(err) })
+    }
+    const authed = await isAuthenticatedRequest()
+    // 回收站内容仅管理员显式请求时返回
+    const includeDeleted = authed && request.nextUrl.searchParams.get('includeDeleted') === '1'
+    const posts = await readAllPosts({ includeDeleted })
+    // 草稿/未到点定时文章只对管理员可见：未登录请求一律过滤
+    const visible = authed ? posts : posts.filter((p) => isPublishedPost(p))
     log.debug('响应：GET /api/posts', { count: visible.length })
     return NextResponse.json(visible)
   } catch (err) {

@@ -1,9 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { fetchPosts, type Post } from '@/lib/posts'
 import { DailyStatsChart } from '@/components/daily-stats-chart'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { useToast } from '@/components/toast'
 
 type DailyStat = {
   date: string
@@ -18,10 +21,16 @@ type StatsResponse = {
 }
 
 export default function AdminDashboard() {
+  const router = useRouter()
+  const t = useToast()
   const [posts, setPosts] = useState<Post[]>([])
   const [postsLoading, setPostsLoading] = useState(true)
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [statsLoading, setStatsLoading] = useState(true)
+  // 数据导入：选择文件 → 二次确认 → POST /api/admin/import
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const [importPayload, setImportPayload] = useState<{ summary: string; body: unknown } | null>(null)
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     fetchPosts().then((p) => {
@@ -90,6 +99,52 @@ export default function AdminDashboard() {
   const recentPosts = [...posts]
     .sort((a, b) => (a.date < b.date ? 1 : -1))
     .slice(0, 5)
+
+  const onPickImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const text = await file.text()
+      const body = JSON.parse(text) as Record<string, unknown>
+      const parts: string[] = []
+      if (Array.isArray(body.posts)) parts.push(`文章 ${body.posts.length} 篇`)
+      if (Array.isArray(body.comments)) parts.push(`评论 ${body.comments.length} 条`)
+      if (Array.isArray(body.notifications)) parts.push(`通知 ${body.notifications.length} 条`)
+      if (body.stats && typeof body.stats === 'object') parts.push('阅读统计')
+      if (parts.length === 0) {
+        t.error({ title: '备份文件中没有可导入的数据' })
+        return
+      }
+      setImportPayload({ summary: parts.join('、'), body })
+    } catch {
+      t.error({ title: '文件不是合法的备份 JSON' })
+    }
+  }
+
+  const onConfirmImport = async () => {
+    if (!importPayload) return
+    setImporting(true)
+    try {
+      const res = await fetch('/api/admin/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(importPayload.body),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '导入失败')
+      }
+      t.success({ title: '导入成功', description: '数据已替换，即将刷新页面。' })
+      setImportPayload(null)
+      setTimeout(() => router.refresh(), 600)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '导入失败'
+      t.error({ title: msg.includes('401') ? '登录已过期，请重新登录' : msg })
+    } finally {
+      setImporting(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -200,6 +255,51 @@ export default function AdminDashboard() {
           </p>
         </Link>
       </div>
+
+      {/* 数据备份 */}
+      <div className="mt-4 rounded-lg border border-border bg-card p-6">
+        <h3 className="text-lg font-medium">💾 数据备份</h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          所有数据都是单个 JSON 文件，建议定期导出备份；导入会用备份整体替换对应数据。
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+          <a
+            href="/api/admin/export"
+            className="border border-primary px-4 py-2 text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+          >
+            导出全部数据
+          </a>
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            className="border border-border px-4 py-2 transition-colors hover:border-primary hover:text-primary"
+          >
+            从备份导入…
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={onPickImportFile}
+          />
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={!!importPayload}
+        title="确认导入数据"
+        description={
+          importPayload
+            ? `将用备份中的内容整体替换现有数据（${importPayload.summary}）。该操作不可撤销，建议先导出当前数据。确定继续？`
+            : undefined
+        }
+        variant="danger"
+        confirmText={importing ? '导入中…' : '确认导入'}
+        loading={importing}
+        onConfirm={onConfirmImport}
+        onCancel={() => !importing && setImportPayload(null)}
+      />
     </div>
   )
 }

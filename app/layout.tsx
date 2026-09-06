@@ -56,9 +56,15 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'dark',
-  themeColor: [{ media: '(prefers-color-scheme: dark)', color: '#0a0a0a' }],
+  colorScheme: 'light dark',
+  themeColor: [
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' },
+    { media: '(prefers-color-scheme: light)', color: '#fbfbfd' },
+  ],
 }
+
+// 首帧前应用主题：html 默认带 .dark，用户选过亮色则移除，避免闪烁
+const themeInitScript = `(function(){try{if(localStorage.getItem('start:theme')==='light'){document.documentElement.classList.remove('dark')}}catch(e){}})()`
 
 export default function RootLayout({
   children,
@@ -66,7 +72,10 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="zh-CN" className="h-full">
+    <html lang="zh-CN" className="h-full dark" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className="antialiased flex min-h-screen flex-col">
         <ToastProvider>
           <SiteNav />
