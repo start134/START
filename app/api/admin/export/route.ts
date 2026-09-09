@@ -1,36 +1,37 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
 import { isAuthenticatedRequest } from '@/lib/auth'
 import { readAllPosts } from '@/lib/posts-store'
 import { readAllComments } from '@/lib/comments-store'
 import { readAllNotifications } from '@/lib/notifications-store'
+import { getDailyStats, getTotalViews } from '@/lib/kv-stats'
+import { db } from '@/lib/db'
 
 const log = createLogger('api/admin/export')
 
-// 数据导出（仅管理员）：把全部 JSON 数据打包成一个备份文件下载。
-// 配套的导入接口是 /api/admin/import。
+// 数据导出（仅管理员）：全部数据打包成一个 JSON 备份文件下载（格式与导入接口兼容）。
 export async function GET() {
   if (!(await isAuthenticatedRequest())) {
     return NextResponse.json({ error: '请先登录' }, { status: 401 })
   }
 
   try {
-    const [posts, comments, notifications, statsRaw] = await Promise.all([
+    const [posts, comments, notifications, daily, totalViews] = await Promise.all([
       readAllPosts({ includeDeleted: true }),
       readAllComments(),
       readAllNotifications(),
-      fs
-        .readFile(path.join(process.cwd(), 'data', 'stats.json'), 'utf-8')
-        .catch(() => null),
+      getDailyStats(3650), // 覆盖全部历史（内部按天补零）
+      getTotalViews(),
     ])
 
-    let stats: unknown = null
-    try {
-      stats = statsRaw ? JSON.parse(statsRaw) : null
-    } catch {
-      stats = null
+    // 单篇每日统计 → bySlug 结构（与旧版备份格式兼容）
+    const slugRows = db()
+      .prepare("SELECT date, slug, views FROM stats_daily WHERE slug != '' ORDER BY date ASC")
+      .all() as { date: string; slug: string; views: number }[]
+    const bySlug: Record<string, Record<string, number>> = {}
+    for (const r of slugRows) {
+      if (!bySlug[r.date]) bySlug[r.date] = {}
+      bySlug[r.date][r.slug] = r.views
     }
 
     const payload = {
@@ -38,7 +39,11 @@ export async function GET() {
       posts,
       comments,
       notifications,
-      stats,
+      stats: {
+        daily: daily.filter((d) => d.views > 0),
+        totalViews,
+        bySlug,
+      },
     }
 
     const date = new Date().toISOString().slice(0, 10)

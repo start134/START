@@ -1,10 +1,8 @@
-import { readJSON, writeJSON, withFileLock } from '@/lib/storage'
+// 评论存储（SQLite 版）：导出签名与旧 JSON 实现一致。
 import { createLogger } from '@/lib/logger'
+import { db } from '@/lib/db'
 
 const log = createLogger('comments-store')
-const COMMENTS_FILE = 'comments.json'
-// 与 storage.withFileLock 共用的锁键：串行化对评论的读改写事务
-const COMMENTS_LOCK_KEY = 'comments.json'
 
 export type Comment = {
   id: string
@@ -25,75 +23,103 @@ export type CommentInput = {
   content: string
 }
 
+type CommentRow = {
+  id: string
+  post_slug: string
+  parent_id: string | null
+  name: string
+  email: string | null
+  content: string
+  created_at: string
+  status: string
+}
+
+function rowToComment(row: CommentRow): Comment {
+  return {
+    id: row.id,
+    postSlug: row.post_slug,
+    ...(row.parent_id ? { parentId: row.parent_id } : {}),
+    name: row.name,
+    ...(row.email ? { email: row.email } : {}),
+    content: row.content,
+    createdAt: row.created_at,
+    status: row.status === 'approved' ? 'approved' : 'pending',
+  }
+}
+
 function generateId(): string {
   return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function sortByDateDesc(comments: Comment[]): Comment[] {
-  return [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-}
+const UPSERT_COMMENT = `
+  INSERT INTO comments (id, post_slug, parent_id, name, email, content, created_at, status)
+  VALUES (@id, @postSlug, @parentId, @name, @email, @content, @createdAt, @status)
+  ON CONFLICT(id) DO UPDATE SET
+    post_slug=excluded.post_slug, parent_id=excluded.parent_id, name=excluded.name,
+    email=excluded.email, content=excluded.content, created_at=excluded.created_at, status=excluded.status
+`
 
 export async function readAllComments(): Promise<Comment[]> {
-  const comments = await readJSON<Comment[]>(COMMENTS_FILE)
-  if (!comments || !Array.isArray(comments)) {
-    log.info('评论文件不存在或为空，返回空数组')
-    return []
-  }
-  return sortByDateDesc(comments)
+  const rows = db()
+    .prepare('SELECT * FROM comments ORDER BY created_at DESC, rowid DESC')
+    .all() as CommentRow[]
+  return rows.map(rowToComment)
 }
 
 export async function readCommentsByPost(postSlug: string): Promise<Comment[]> {
-  const all = await readAllComments()
-  return all.filter(c => c.postSlug === postSlug && c.status === 'approved')
+  const rows = db()
+    .prepare('SELECT * FROM comments WHERE post_slug = ? AND status = ? ORDER BY created_at DESC')
+    .all(postSlug, 'approved') as CommentRow[]
+  return rows.map(rowToComment)
 }
 
 export async function readComment(id: string): Promise<Comment | undefined> {
-  const all = await readAllComments()
-  return all.find(c => c.id === id)
+  const row = db().prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow | undefined
+  return row ? rowToComment(row) : undefined
 }
 
 export async function createComment(input: CommentInput): Promise<Comment> {
   const comment: Comment = {
     id: generateId(),
     postSlug: input.postSlug,
-    parentId: input.parentId,
+    ...(input.parentId ? { parentId: input.parentId } : {}),
     name: input.name.trim() || '匿名',
-    email: input.email?.trim(),
+    ...(input.email?.trim() ? { email: input.email.trim() } : {}),
     content: input.content.trim(),
     createdAt: new Date().toISOString(),
     status: 'pending',
   }
-
-  await withFileLock(COMMENTS_LOCK_KEY, async () => {
-    const all = await readAllComments()
-    all.push(comment)
-    await writeJSON(COMMENTS_FILE, all)
+  db().prepare(UPSERT_COMMENT).run({
+    id: comment.id,
+    postSlug: comment.postSlug,
+    parentId: comment.parentId ?? null,
+    name: comment.name,
+    email: comment.email ?? null,
+    content: comment.content,
+    createdAt: comment.createdAt,
+    status: comment.status,
   })
   log.info('评论创建成功', { id: comment.id, postSlug: comment.postSlug })
   return comment
 }
 
 export async function approveComment(id: string): Promise<Comment | undefined> {
-  return withFileLock(COMMENTS_LOCK_KEY, async () => {
-    const all = await readAllComments()
-    const idx = all.findIndex(c => c.id === id)
-    if (idx < 0) return undefined
-    all[idx] = { ...all[idx], status: 'approved' }
-    await writeJSON(COMMENTS_FILE, all)
-    log.info('评论已批准', { id })
-    return all[idx]
-  })
+  const result = db()
+    .prepare("UPDATE comments SET status = 'approved' WHERE id = ?")
+    .run(id)
+  if (result.changes === 0) return undefined
+  log.info('评论已批准', { id })
+  return readComment(id)
 }
 
 export async function deleteComment(id: string): Promise<boolean> {
-  return withFileLock(COMMENTS_LOCK_KEY, async () => {
-    const all = await readAllComments()
-    const next = all.filter(c => c.id !== id && c.parentId !== id)
-    if (next.length === all.length) return false
-    await writeJSON(COMMENTS_FILE, next)
-    log.info('评论已删除', { id })
-    return true
-  })
+  // 级联删除其下所有回复
+  const result = db()
+    .prepare('DELETE FROM comments WHERE id = ? OR parent_id = ?')
+    .run(id, id)
+  if (result.changes === 0) return false
+  log.info('评论已删除（含回复）', { id, count: result.changes })
+  return true
 }
 
 /**
@@ -105,53 +131,37 @@ export async function createAdminReply(input: {
   author: string
   content: string
 }): Promise<Comment | undefined> {
-  return withFileLock(COMMENTS_LOCK_KEY, async () => {
-    const all = await readAllComments()
-    const parent = all.find(c => c.id === input.parentId)
-    if (!parent) return undefined
+  const run = db().transaction((): Comment | undefined => {
+    const parentRow = db()
+      .prepare('SELECT * FROM comments WHERE id = ?')
+      .get(input.parentId) as CommentRow | undefined
+    if (!parentRow) return undefined
+    db()
+      .prepare("UPDATE comments SET status = 'approved' WHERE id = ? AND status = 'pending'")
+      .run(input.parentId)
     const reply: Comment = {
       id: generateId(),
-      postSlug: parent.postSlug,
-      parentId: parent.id,
+      postSlug: parentRow.post_slug,
+      parentId: parentRow.id,
       name: input.author,
       content: input.content.trim(),
       createdAt: new Date().toISOString(),
       status: 'approved',
     }
-    const next = all.map(c =>
-      c.id === parent.id && c.status === 'pending' ? { ...c, status: 'approved' as const } : c
-    )
-    next.push(reply)
-    await writeJSON(COMMENTS_FILE, next)
-    log.info('管理员回复已创建', { id: reply.id, parent: parent.id })
+    db().prepare(UPSERT_COMMENT).run({
+      id: reply.id,
+      postSlug: reply.postSlug,
+      parentId: reply.parentId,
+      name: reply.name,
+      email: null,
+      content: reply.content,
+      createdAt: reply.createdAt,
+      status: reply.status,
+    })
+    log.info('管理员回复已创建', { id: reply.id, parent: parentRow.id })
     return reply
   })
-}
-
-export async function getCommentsWithReplies(postSlug: string): Promise<Comment[]> {
-  const all = await readAllComments()
-  const postComments = all.filter(c => c.postSlug === postSlug && c.status === 'approved')
-  const topLevel = postComments.filter(c => !c.parentId)
-  const replies = postComments.filter(c => c.parentId)
-
-  const result: Comment[] = []
-  for (const comment of topLevel) {
-    result.push(comment)
-    const commentReplies = replies
-      .filter(r => r.parentId === comment.id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    result.push(...commentReplies)
-  }
-  return result
-}
-
-export async function getPendingCommentsCount(): Promise<number> {
-  const all = await readAllComments()
-  return all.filter(c => c.status === 'pending').length
-}
-
-export async function getAllCommentsForAdmin(): Promise<Comment[]> {
-  return readAllComments()
+  return run()
 }
 
 // 公开响应剥离邮箱：评论者邮箱只进管理端，不对访客暴露
@@ -161,10 +171,14 @@ export function toPublicComment(comment: Comment): PublicComment {
   return {
     id: comment.id,
     postSlug: comment.postSlug,
-    parentId: comment.parentId,
+    ...(comment.parentId ? { parentId: comment.parentId } : {}),
     name: comment.name,
     content: comment.content,
     createdAt: comment.createdAt,
     status: comment.status,
   }
+}
+
+export async function getAllCommentsForAdmin(): Promise<Comment[]> {
+  return readAllComments()
 }
