@@ -38,12 +38,8 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Local data（开发环境数据，生产由 Vercel Blob/KV 管理）
-data/posts.json
-data/stats.db
-data/stats.db-*
-data/stats.json
-data/stats.json.bak
+# Local data（运行时数据：文章/评论（含邮箱）/通知/统计/每日备份，一律不进 git）
+data/
 
 # Trae IDE
 .trae/

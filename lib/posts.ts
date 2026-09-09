@@ -28,7 +28,9 @@ export async function fetchPost(slug: string): Promise<Post | undefined> {
     return await apiFetch<Post>(`/api/posts/${encodeURIComponent(slug)}`, {
       cache: 'no-store',
     })
-  } catch {
+  } catch (err) {
+    // 404 = 文章不存在（正常路径）；其他错误（网络/500）也按未找到处理，但留下线索
+    console.warn('[posts] fetchPost 失败', slug, err)
     return undefined
   }
 }

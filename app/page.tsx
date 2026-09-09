@@ -16,14 +16,28 @@ function todayKeyCN(): string {
 export default function HomePage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [today, setToday] = useState<string | null>(null)
   const { authed } = useAuth()
 
+  const loadPosts = () => {
+    setLoading(true)
+    setLoadError(false)
+    fetchPosts()
+      .then((p) => {
+        setPosts(p)
+        setLoading(false)
+      })
+      .catch(() => {
+        setLoadError(true)
+        setLoading(false)
+      })
+  }
+
   useEffect(() => {
-    fetchPosts().then((p) => {
-      setPosts(p)
-      setLoading(false)
-    })
+    loadPosts()
+    // 仅挂载时加载一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 日期依赖客户端时区，SSR(here: UTC) 与 hydration(浏览器时区) 可能不同。
@@ -137,6 +151,17 @@ export default function HomePage() {
           <div className="divide-y divide-border border-t border-border pt-2">
             {loading ? (
               <p className="py-4 text-sm text-muted-foreground">加载中…</p>
+            ) : loadError ? (
+              <div className="py-4 text-sm">
+                <p className="text-muted-foreground">文章加载失败。</p>
+                <button
+                  type="button"
+                  onClick={loadPosts}
+                  className="mt-1 text-primary hover:underline"
+                >
+                  重试
+                </button>
+              </div>
             ) : latest.length === 0 ? (
               todays.length === 0 ? (
                 <p className="py-4 text-sm text-muted-foreground">无文章。</p>

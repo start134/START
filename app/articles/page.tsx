@@ -23,6 +23,7 @@ function ArticlesContent() {
   )
   const [statusTab, setStatusTab] = useState<'all' | 'published' | 'draft'>('all')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const { authed } = useAuth()
   const t = useToast()
   const [deleteTarget, setDeleteTarget] = useState<{ slug: string; title: string } | null>(null)
@@ -42,11 +43,24 @@ function ArticlesContent() {
     return ''
   }
 
+  const loadPosts = () => {
+    setLoading(true)
+    setLoadError(false)
+    fetchPosts()
+      .then((p) => {
+        setPosts(p)
+        setLoading(false)
+      })
+      .catch(() => {
+        setLoadError(true)
+        setLoading(false)
+      })
+  }
+
   useEffect(() => {
-    fetchPosts().then((p) => {
-      setPosts(p)
-      setLoading(false)
-    })
+    loadPosts()
+    // 仅挂载时加载一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // URL 参数 ↔ 本地状态双向同步（用户复制链接打开 / 前进后退都能用）
@@ -372,6 +386,17 @@ function ArticlesContent() {
       <div className="mt-6 divide-y divide-border md:mt-10">
         {loading ? (
           <p className="py-10 text-sm text-muted-foreground">加载中…</p>
+        ) : loadError ? (
+          <div className="py-10 text-sm">
+            <p className="text-muted-foreground">文章加载失败，请检查网络后重试。</p>
+            <button
+              type="button"
+              onClick={loadPosts}
+              className="mt-2 border border-border px-3 py-1.5 text-xs transition-colors hover:border-primary hover:text-primary"
+            >
+              重试
+            </button>
+          </div>
         ) : filteredSorted.length === 0 ? (
           <p className="py-10 text-sm text-muted-foreground">
             没有找到相关文章。
