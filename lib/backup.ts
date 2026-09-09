@@ -11,7 +11,10 @@ import { readAllNotifications } from '@/lib/notifications-store'
 
 const log = createLogger('backup')
 
-const BACKUP_DIR = path.join(process.cwd(), 'data', 'backups')
+// Vercel Serverless 文件系统只读（/tmp 除外），部署到 Vercel 时必须用 /tmp/data
+const BACKUP_DIR = process.env.VERCEL
+  ? '/tmp/data/backups'
+  : path.join(process.cwd(), 'data', 'backups')
 const BACKUP_LOCK_KEY = 'backup'
 const KEEP_COUNT = 7
 
@@ -33,7 +36,12 @@ export async function createBackup(): Promise<string> {
     readAllComments(),
     readAllNotifications(),
     fs
-      .readFile(path.join(process.cwd(), 'data', 'stats.json'), 'utf-8')
+      .readFile(
+        process.env.VERCEL
+          ? '/tmp/data/stats.json'
+          : path.join(process.cwd(), 'data', 'stats.json'),
+        'utf-8'
+      )
       .catch(() => null),
   ])
 

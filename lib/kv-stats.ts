@@ -7,7 +7,10 @@ import { withFileLock } from '@/lib/storage'
 
 const log = createLogger('kv-stats')
 
-const LOCAL_FILE = path.join(process.cwd(), 'data', 'stats.json')
+// Vercel Serverless 文件系统只读（/tmp 除外），部署到 Vercel 时必须用 /tmp/data
+const LOCAL_FILE = process.env.VERCEL
+  ? '/tmp/data/stats.json'
+  : path.join(process.cwd(), 'data', 'stats.json')
 const STATS_LOCK_KEY = 'stats.json'
 
 function today(): string {

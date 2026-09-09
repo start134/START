@@ -35,7 +35,10 @@ export type Post = {
   updatedAt?: string
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data')
+// Vercel Serverless 文件系统只读（/tmp 除外），部署到 Vercel 时必须用 /tmp/data
+const DATA_DIR = process.env.VERCEL
+  ? '/tmp/data'
+  : path.join(process.cwd(), 'data')
 const DATA_FILE = path.join(DATA_DIR, 'posts.json')
 // 与 storage.withFileLock 共用的锁键：串行化对 posts.json 的读改写事务
 const DATA_LOCK_KEY = 'posts.json'

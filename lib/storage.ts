@@ -4,7 +4,12 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('storage')
 
-const DATA_DIR = path.join(process.cwd(), 'data')
+// Vercel Serverless 文件系统只读（/tmp 除外），部署到 Vercel 时必须用 /tmp/data
+// 注意：/tmp 在容器冷启动后会清空，评论等写入数据不跨冷启动持久。
+// 如需真正持久化，请改用数据库或 Vercel KV/Blob（见 DEPLOYMENT.md）。
+const DATA_DIR = process.env.VERCEL
+  ? '/tmp/data'
+  : path.join(process.cwd(), 'data')
 
 // 进程内文件写锁：JSON 数据全部是“读全量 → 改 → 写回全量”，
 // 并发写会互相覆盖丢数据，这里按文件名串行化整个读改写事务。
