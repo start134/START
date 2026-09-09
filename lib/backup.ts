@@ -1,42 +1,77 @@
-// 每日自动备份：SQLite 一致快照导出到 data/backups/，保留最近 7 份。
-// 触发时机是"懒触发"：文件存储没有后台进程，借助每次 GET /api/posts
-// 的访问做按天去重（进程内标记，一天最多写一次）。
+// 每日自动备份：把全部 JSON 数据打包到 data/backups/，保留最近 7 份。
+// 触发时机是" opportunistic "：文件存储没有后台进程，借助每次 GET /api/posts
+// 的访问做懒触发（进程内按天去重，一天最多写一次）。
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
-import { backupDb } from '@/lib/db'
+import { withFileLock, writeFileAtomic } from '@/lib/storage'
+import { readAllPosts } from '@/lib/posts-store'
+import { readAllComments } from '@/lib/comments-store'
+import { readAllNotifications } from '@/lib/notifications-store'
 
 const log = createLogger('backup')
 
 const BACKUP_DIR = path.join(process.cwd(), 'data', 'backups')
+const BACKUP_LOCK_KEY = 'backup'
 const KEEP_COUNT = 7
 
 const globalForBackup = globalThis as unknown as {
   __startLastBackupDay?: string
 }
 
+type BackupPayload = {
+  exportedAt: string
+  posts: unknown
+  comments: unknown
+  notifications: unknown
+  stats: unknown
+}
+
 export async function createBackup(): Promise<string> {
+  const [posts, comments, notifications, statsRaw] = await Promise.all([
+    readAllPosts({ includeDeleted: true }),
+    readAllComments(),
+    readAllNotifications(),
+    fs
+      .readFile(path.join(process.cwd(), 'data', 'stats.json'), 'utf-8')
+      .catch(() => null),
+  ])
+
+  let stats: unknown = null
+  try {
+    stats = statsRaw ? JSON.parse(statsRaw) : null
+  } catch {
+    stats = null
+  }
+
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  const filePath = path.join(BACKUP_DIR, `backup-${stamp}.db`)
-
-  await fs.mkdir(BACKUP_DIR, { recursive: true })
-  // better-sqlite3 backup API：在线热备，WAL 模式下也保证一致快照
-  await backupDb(filePath)
-
-  // 只保留最近 KEEP_COUNT 份
-  const files = (await fs.readdir(BACKUP_DIR))
-    .filter((f) => f.startsWith('backup-') && f.endsWith('.db'))
-    .sort()
-    .reverse()
-  for (const old of files.slice(KEEP_COUNT)) {
-    try {
-      await fs.unlink(path.join(BACKUP_DIR, old))
-    } catch {
-      // 删旧失败不影响本次备份
-    }
+  const filePath = path.join(BACKUP_DIR, `backup-${stamp}.json`)
+  const payload: BackupPayload = {
+    exportedAt: now.toISOString(),
+    posts,
+    comments,
+    notifications,
+    stats,
   }
+
+  await withFileLock(BACKUP_LOCK_KEY, async () => {
+    await fs.mkdir(BACKUP_DIR, { recursive: true })
+    await writeFileAtomic(filePath, JSON.stringify(payload, null, 2))
+    // 只保留最近 KEEP_COUNT 份
+    const files = (await fs.readdir(BACKUP_DIR))
+      .filter((f) => f.startsWith('backup-') && f.endsWith('.json'))
+      .sort()
+      .reverse()
+    for (const old of files.slice(KEEP_COUNT)) {
+      try {
+        await fs.unlink(path.join(BACKUP_DIR, old))
+      } catch {
+        // 删旧失败不影响本次备份
+      }
+    }
+  })
 
   log.info('自动备份完成', { file: path.basename(filePath) })
   return filePath

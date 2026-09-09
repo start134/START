@@ -9,7 +9,6 @@ __v0_jsx-dev-runtime.ts
 # Environment variables（敏感！切勿提交）
 .env*.local
 .env
-.env.docker
 
 # Dependencies
 node_modules/
