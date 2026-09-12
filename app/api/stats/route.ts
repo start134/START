@@ -1,19 +1,27 @@
 import { NextResponse } from 'next/server'
+import { isAuthenticatedRequest } from '@/lib/auth'
 import { getArticleDailyStats, getDailyStats, getTotalViews } from '@/lib/kv-stats'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('api/stats')
 
 export async function GET(request: Request) {
+  if (!(await isAuthenticatedRequest())) {
+    return NextResponse.json({ error: '请先登录' }, { status: 401 })
+  }
+
   const { searchParams } = new URL(request.url)
-  const days = parseInt(searchParams.get('days') ?? '30', 10)
+  const rawDays = Number.parseInt(searchParams.get('days') ?? '30', 10)
   const slug = searchParams.get('slug')
 
-  // 限制范围 7-90 天
-  const safeDays = Math.max(7, Math.min(90, days))
+  // 限制范围 7-90 天。
+  // NaN 具有传染性：Math.min(90, NaN) 和 Math.max(7, NaN) 都返回 NaN，钳制对 NaN 完全失效，
+  // safeDays 会变成 NaN 并一路传到 getDailyStats —— 那里 `i >= 0` 对 NaN 恒为假，
+  // 循环体一次都不执行，接口 200 返回空数组和全 0 数字。所以必须先判有限性，再钳制。
+  const safeDays = Number.isFinite(rawDays) ? Math.max(7, Math.min(90, rawDays)) : 30
 
   log.debug('统计 API 被请求', {
-    requestedDays: days,
+    requestedDays: rawDays,
     safeDays,
     slug,
   })

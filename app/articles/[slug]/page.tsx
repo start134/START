@@ -106,12 +106,18 @@ export default async function ArticlePage({ params }: Props) {
     articleSection: post.category,
     ...(post.tags?.length ? { keywords: post.tags.join(', ') } : {}),
   }
+  const jsonLdScript = JSON.stringify(jsonLd)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
 
   return (
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdScript }}
       />
       <ArticleView
         key={slug}

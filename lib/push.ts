@@ -7,6 +7,7 @@
 //   NOTIFY_FROM       发件人，可选，默认 onboarding@resend.dev（仅测试用）
 // 任何渠道失败只记日志，绝不影响评论主流程。
 import { createLogger } from '@/lib/logger'
+import { SITE_URL } from '@/lib/site'
 
 const log = createLogger('push')
 
@@ -18,8 +19,23 @@ type CommentPushInput = {
   content: string
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }
+    return entities[char]
+  })
+}
+
 async function pushBark(title: string, body: string): Promise<void> {
-  const base = process.env.BARK_URL?.replace(/\/$/, '')
+  // 环境变量一律先 trim：从部署平台复制粘贴时极易带上尾随空格/换行，
+  // 拼进 URL 会被编码成 %20 直接 404，且报错信息完全指不到根因。
+  const base = process.env.BARK_URL?.trim().replace(/\/$/, '')
   if (!base) return
   const res = await fetch(base, {
     method: 'POST',
@@ -32,7 +48,7 @@ async function pushBark(title: string, body: string): Promise<void> {
 }
 
 async function pushServerChan(title: string, desp: string): Promise<void> {
-  const key = process.env.SERVERCHAN_SENDKEY
+  const key = process.env.SERVERCHAN_SENDKEY?.trim()
   if (!key) return
   const res = await fetch(`https://sctapi.ftqq.com/${key}.send`, {
     method: 'POST',
@@ -45,10 +61,10 @@ async function pushServerChan(title: string, desp: string): Promise<void> {
 }
 
 async function pushEmail(subject: string, html: string): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY
-  const to = process.env.NOTIFY_EMAIL
+  const apiKey = process.env.RESEND_API_KEY?.trim()
+  const to = process.env.NOTIFY_EMAIL?.trim()
   if (!apiKey || !to) return
-  const from = process.env.NOTIFY_FROM || 'START Blog <onboarding@resend.dev>'
+  const from = process.env.NOTIFY_FROM?.trim() || 'START Blog <onboarding@resend.dev>'
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -74,15 +90,15 @@ export async function pushCommentNotification(input: CommentPushInput): Promise<
   const preview =
     input.content.length > 80 ? input.content.slice(0, 80) + '…' : input.content
   const body = `${input.commenter}：${preview}`
-  const url = `/articles/${input.postSlug}`
+  const url = `${SITE_URL}/articles/${encodeURIComponent(input.postSlug)}`
 
   const tasks: Promise<void>[] = []
   if (process.env.BARK_URL) tasks.push(pushBark(title, body))
   if (process.env.SERVERCHAN_SENDKEY) tasks.push(pushServerChan(title, body))
   if (process.env.RESEND_API_KEY && process.env.NOTIFY_EMAIL) {
-    const html = `<p><strong>${input.commenter}</strong> 在《${input.postTitle}》中${
+    const html = `<p><strong>${escapeHtml(input.commenter)}</strong> 在《${escapeHtml(input.postTitle)}》中${
       input.type === 'reply' ? '发表了回复' : '发表了评论'
-    }：</p><blockquote>${preview}</blockquote><p><a href="${url}">查看全文</a></p>`
+    }：</p><blockquote>${escapeHtml(preview)}</blockquote><p><a href="${escapeHtml(url)}">查看全文</a></p>`
     tasks.push(pushEmail(title, html))
   }
   if (tasks.length === 0) {

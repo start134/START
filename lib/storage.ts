@@ -53,9 +53,9 @@ export async function writeFileAtomic(
 
 export async function readJSON<T>(fileName: string): Promise<T | null> {
   const filePath = path.join(DATA_DIR, fileName)
+  let raw: string
   try {
-    const raw = await fs.readFile(filePath, 'utf-8')
-    return JSON.parse(raw) as T
+    raw = await fs.readFile(filePath, 'utf-8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
       log.debug('文件不存在，返回 null', { fileName })
@@ -64,6 +64,38 @@ export async function readJSON<T>(fileName: string): Promise<T | null> {
     log.warn('读取文件失败', { fileName, error: String(err) })
     return null
   }
+  try {
+    return JSON.parse(raw) as T
+  } catch (err) {
+    // 解析失败必须抛错，绝不能返回 null。
+    // 这些 store 都是"读全量 → 改 → 写回全量"的模型：若此处把损坏当成空数据返回，
+    // 调用方会拿着空数组去 push 再整体写回，把"可修复的文件损坏"直接变成
+    // "历史数据被覆盖"这种不可逆的丢失。宁可让请求失败，也不能静默毁数据。
+    log.error('JSON 解析失败，已中止读取以避免空数据回写覆盖', {
+      fileName,
+      error: String(err),
+    })
+    throw new Error(`数据文件 ${fileName} 内容损坏，无法解析`)
+  }
+}
+
+/** 读取原始文本（不做 JSON 解析），供导入前的快照回滚使用 */
+export async function readRaw(fileName: string): Promise<string | null> {
+  const filePath = path.join(DATA_DIR, fileName)
+  try {
+    return await fs.readFile(filePath, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+    throw err
+  }
+}
+
+/** 原样写回文本（不做序列化），供导入失败时的快照回滚使用 */
+export async function writeRaw(fileName: string, raw: string): Promise<void> {
+  const filePath = path.join(DATA_DIR, fileName)
+  await fs.mkdir(DATA_DIR, { recursive: true })
+  await writeFileAtomic(filePath, raw)
+  log.debug('原样写入成功', { fileName })
 }
 
 // 写入失败会抛错，由调用方决定如何响应（不再静默吞掉导致“看似成功实则丢失”）

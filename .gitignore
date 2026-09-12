@@ -41,6 +41,9 @@ Desktop.ini
 # Local data（运行时数据：文章/评论（含邮箱）/通知/统计/每日备份，一律不进 git）
 data/
 
+# AI 助手的工作区数据（记忆/技能等本地笔记，不进 git）
+.workbuddy-ai/
+
 # Trae IDE
 .trae/
 

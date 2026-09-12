@@ -78,9 +78,16 @@ export function clearFailures(key: string): void {
   windows.delete(key)
 }
 
-// 反向代理（Vercel 等）下取真实客户端 IP
+// 反向代理（Vercel 等）下取真实客户端 IP。
+// 兜底 'unknown' 意味着所有取不到 IP 的请求会共用同一个限流桶、互相误伤，
+// 所以这里把常见的代理头都试一遍，最后才兜底。
 export function getClientIp(request: Request): string {
-  const fwd = request.headers.get('x-forwarded-for')
-  if (fwd) return fwd.split(',')[0].trim()
-  return request.headers.get('x-real-ip') ?? 'unknown'
+  const fwd = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+  if (fwd) return fwd
+  return (
+    request.headers.get('x-real-ip')?.trim() ||
+    request.headers.get('cf-connecting-ip')?.trim() ||
+    request.headers.get('x-vercel-forwarded-for')?.split(',')[0]?.trim() ||
+    'unknown'
+  )
 }

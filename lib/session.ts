@@ -24,7 +24,16 @@ function getAdminPassword(): string {
 // 会话签名密钥：优先 SESSION_SECRET，否则从管理员密码派生（改密码 = 所有旧会话失效）
 function getSessionSecret(): string {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET
-  return `start-blog:v1:${process.env.ADMIN_PASSWORD ?? 'dev-insecure'}`
+  const adminPassword = process.env.ADMIN_PASSWORD
+  if (adminPassword) return `start-blog:v1:${adminPassword}`
+  // 生产环境绝不允许回退到可预测的常量。
+  // 旧实现回退成 'start-blog:v1:dev-insecure'：这个字符串是公开的，任何人都能自己
+  // 算出 HMAC 伪造一个过期时间合法的 Cookie，直接绕过登录拿到管理权限。
+  // 抛错后由 validateSession 捕获，表现为"所有会话一律无效"——失败关闭。
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('生产环境必须配置 ADMIN_PASSWORD 或 SESSION_SECRET 才能签发/校验会话')
+  }
+  return 'start-blog:v1:dev-insecure'
 }
 
 // 用 timingSafeEqual 做恒定时间比较，避免时序攻击
@@ -73,7 +82,16 @@ export function validateSession(token: string | null | undefined): boolean {
   if (dot <= 0) return false
   const payload = token.slice(0, dot)
   const sig = token.slice(dot + 1)
-  if (!signatureEquals(sig, sign(payload))) return false
+  let expected: string
+  try {
+    expected = sign(payload)
+  } catch (err) {
+    // 密钥不可用（例如生产环境漏配 ADMIN_PASSWORD 与 SESSION_SECRET）：
+    // 此时无法安全地校验签名，一律视为未登录，绝不"放行"。
+    log.error('会话密钥不可用，拒绝校验', { error: String(err) })
+    return false
+  }
+  if (!signatureEquals(sig, expected)) return false
   const expireAt = Number(payload)
   if (!Number.isFinite(expireAt) || Date.now() > expireAt) return false
   return true

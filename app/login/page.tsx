@@ -4,11 +4,37 @@ import { Suspense, useState, type FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast, type ToastVariant } from '@/components/toast'
 
+/**
+ * 把 ?next= 参数收敛成一个站内路径，防开放重定向。
+ *
+ * 为什么不能只做字符串判断：URL 解析器在解析阶段会剥离 TAB / LF / CR，
+ * 并把反斜杠视作 `/`，于是 `/\t//evil.com`、`/\\evil.com` 都会被解析成
+ * 协议相对地址 `//evil.com`；只判断"以单个 / 开头且不含反斜杠"是拦不住的。
+ * 所以这里改用哑基址解析一次，让解析器给出最终形态，再用 origin 反查是否同源。
+ *
+ * 二次校验的必要性：解析器还会做点段归一化，`/..//evil.com` 的 pathname 会变成
+ * `//evil.com`——如果直接采信归一化结果，漏洞会换个形式复现，因此必须再查一次前导 `//`。
+ */
+function safeRedirectPath(next: string | null): string {
+  if (!next) return '/'
+  const base = 'http://internal.local'
+  try {
+    const url = new URL(next, base)
+    if (url.origin !== base) return '/'
+    // pathname 已被序列化器做过百分号编码，不会再残留原始控制字符
+    const path = `${url.pathname}${url.search}${url.hash}`
+    if (!path.startsWith('/') || path.startsWith('//')) return '/'
+    return path
+  } catch {
+    return '/'
+  }
+}
+
 function LoginContent() {
   const router = useRouter()
   const sp = useSearchParams()
   const t = useToast()
-  const redirect = sp.get('next') || '/'
+  const redirect = safeRedirectPath(sp.get('next'))
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -56,7 +82,7 @@ function LoginContent() {
       showToast('success', { title: '登录成功', description: '正在跳转…' })
       // 等 toast 展示一点再跳，避免一闪而过
       setTimeout(() => {
-        router.replace(redirect.startsWith('/') ? redirect : '/')
+        router.replace(redirect)
         router.refresh()
       }, 600)
     } catch (err) {

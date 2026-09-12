@@ -5,6 +5,7 @@ import {
   deletePost,
   isPublishedPost,
   PostConflictError,
+  PostInputError,
   purgePost,
   readPost,
   updatePost,
@@ -76,6 +77,11 @@ export async function PATCH(request: NextRequest, ctx: Ctx) {
   } catch (err) {
     if (err instanceof PostConflictError) {
       return NextResponse.json({ error: err.message }, { status: 409 })
+    }
+    // 业务不变量不满足（如置为定时发布却没给时间）属于客户端输入问题，返回 400 而非 500
+    if (err instanceof PostInputError) {
+      log.warn('PATCH 违反业务规则', { slug, error: err.message })
+      return NextResponse.json({ error: err.message }, { status: 400 })
     }
     log.error('PATCH /api/posts/[slug] 处理失败', { slug, error: String(err) })
     return NextResponse.json({ error: '更新失败' }, { status: 500 })

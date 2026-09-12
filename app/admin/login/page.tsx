@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useToast } from '@/components/toast'
@@ -16,10 +16,11 @@ export default function AdminLogin() {
   const [forgotOpen, setForgotOpen] = useState(false)
 
   // 如果已登录，直接跳转到仪表盘
-  if (authed) {
-    router.push('/admin')
-    return null
-  }
+  useEffect(() => {
+    if (authed) router.replace('/admin')
+  }, [authed, router])
+
+  if (authed) return null
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -28,6 +29,9 @@ export default function AdminLogin() {
       return
     }
     setSubmitting(true)
+    // 只有失败时才把按钮解锁：成功后会走 600ms 的跳转延迟，
+    // 若此时解锁，用户可以在这段时间里重复提交登录请求。
+    let ok = false
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -40,6 +44,7 @@ export default function AdminLogin() {
         t.error({ title: msg })
         return
       }
+      ok = true
       t.success({ title: '登录成功', description: '正在跳转...' })
       setTimeout(() => {
         router.replace('/admin')
@@ -48,7 +53,7 @@ export default function AdminLogin() {
     } catch {
       t.error({ title: '网络错误，请稍后重试' })
     } finally {
-      setSubmitting(false)
+      if (!ok) setSubmitting(false)
     }
   }
 

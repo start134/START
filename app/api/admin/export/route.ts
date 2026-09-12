@@ -1,11 +1,10 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
 import { isAuthenticatedRequest } from '@/lib/auth'
 import { readAllPosts } from '@/lib/posts-store'
 import { readAllComments } from '@/lib/comments-store'
 import { readAllNotifications } from '@/lib/notifications-store'
+import { readJSON } from '@/lib/storage'
 
 const log = createLogger('api/admin/export')
 
@@ -17,20 +16,23 @@ export async function GET() {
   }
 
   try {
-    const [posts, comments, notifications, statsRaw] = await Promise.all([
+    const [posts, comments, notifications] = await Promise.all([
       readAllPosts({ includeDeleted: true }),
       readAllComments(),
       readAllNotifications(),
-      fs
-        .readFile(path.join(process.cwd(), 'data', 'stats.json'), 'utf-8')
-        .catch(() => null),
     ])
 
+    // stats.json 单独读取并单独兜底。
+    // readJSON 现在遇到内容损坏会抛错（避免空数据回写覆盖），但备份不该因为一个分区
+    // 读不出来就整体失败——那反而丢掉了把 posts/comments 抢救出来的机会。
+    // 代价是必须把降级显式写进 warnings，杜绝"备份看起来完整、其实统计全丢"的静默降级。
     let stats: unknown = null
+    const warnings: string[] = []
     try {
-      stats = statsRaw ? JSON.parse(statsRaw) : null
-    } catch {
-      stats = null
+      stats = await readJSON<unknown>('stats.json')
+    } catch (err) {
+      warnings.push(`stats.json 读取失败，本次备份未包含统计数据：${String(err)}`)
+      log.error('导出时读取 stats.json 失败，已降级导出', { error: String(err) })
     }
 
     const payload = {
@@ -39,6 +41,7 @@ export async function GET() {
       comments,
       notifications,
       stats,
+      ...(warnings.length > 0 ? { warnings } : {}),
     }
 
     const date = new Date().toISOString().slice(0, 10)
@@ -46,6 +49,8 @@ export async function GET() {
       posts: posts.length,
       comments: comments.length,
       notifications: notifications.length,
+      statsIncluded: stats !== null,
+      warnings: warnings.length,
     })
     return new NextResponse(JSON.stringify(payload, null, 2), {
       headers: {

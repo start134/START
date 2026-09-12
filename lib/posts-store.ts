@@ -14,6 +14,14 @@ export class PostConflictError extends Error {
   }
 }
 
+/** 输入违反了存储层的业务不变量（如定时发布却没有发布时间）—— 对应 HTTP 400 */
+export class PostInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PostInputError'
+  }
+}
+
 export type Post = {
   slug: string
   date: string
@@ -260,10 +268,11 @@ export async function updatePost(
       return undefined
     }
     const current = posts[idx]
-    // 乐观锁：编辑器保存时带上它读到的 updatedAt，不匹配说明已被其他窗口改过
+    // 乐观锁：编辑器保存时带上它读到的 updatedAt，不匹配说明已被其他窗口改过。
+    // 注意不能再要求 current.updatedAt 必须存在：种子数据与早期文章没有这个字段，
+    // 加上那个前置条件后，冲突检测对它们会整体静默失效，导致后保存的人直接覆盖前一个人。
     if (
       opts?.expectedUpdatedAt !== undefined &&
-      current.updatedAt !== undefined &&
       current.updatedAt !== opts.expectedUpdatedAt
     ) {
       log.warn('更新冲突：文章已被其他窗口修改', { slug })
@@ -277,6 +286,13 @@ export async function updatePost(
       nextStatus === 'scheduled'
         ? (input.publishAt ?? current.publishAt)
         : undefined
+    // 绝不允许留下"status=scheduled 但 publishAt 为空"的文章：
+    // isPublishedPost 要求 publishAt 存在才会放行，promoteScheduledPosts 也要求 publishAt 非空，
+    // 两条路径都会跳过它 —— 文章会变成前台永久不可见、也永远不会自动转正的幽灵文章。
+    if (nextStatus === 'scheduled' && !publishAt) {
+      log.warn('定时发布缺少发布时间，已拒绝更新', { slug })
+      throw new PostInputError('定时发布需要选择发布时间')
+    }
     const updated: Post = {
       ...current,
       title,
@@ -310,6 +326,8 @@ export async function incrementRead(slug: string): Promise<Post | undefined> {
     const current = posts[idx]
     if (!isPublishedPost(current)) {
       log.info('草稿不计阅读量', { slug })
+      // 仍然回传文章本身：调用方据此区分"文章存在但未计数"与"文章不存在"，
+      // 否则公开的 view 接口会对一篇真实存在的草稿返回 404，语义错误且污染日志。
       post = current
       return
     }
@@ -398,8 +416,13 @@ export async function purgePost(slug: string): Promise<boolean> {
 export async function promoteScheduledPosts(): Promise<number> {
   const now = Date.now()
   const all = await readAllPosts({ includeDeleted: true })
+  // 回收站里的文章不参与转正：它们在回收站期间不该被"发布"
   const hasDue = all.some(
-    (p) => p.status === 'scheduled' && !!p.publishAt && new Date(p.publishAt).getTime() <= now
+    (p) =>
+      !p.deletedAt &&
+      p.status === 'scheduled' &&
+      !!p.publishAt &&
+      new Date(p.publishAt).getTime() <= now
   )
   if (!hasDue) return 0
   let promoted = 0
@@ -407,7 +430,12 @@ export async function promoteScheduledPosts(): Promise<number> {
     const posts = await loadPostsForWrite()
     for (let i = 0; i < posts.length; i++) {
       const p = posts[i]
-      if (p.status === 'scheduled' && p.publishAt && new Date(p.publishAt).getTime() <= now) {
+      if (
+        !p.deletedAt &&
+        p.status === 'scheduled' &&
+        p.publishAt &&
+        new Date(p.publishAt).getTime() <= now
+      ) {
         posts[i] = {
           ...p,
           status: 'published',

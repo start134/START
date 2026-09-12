@@ -9,6 +9,11 @@ export default function ContactPage() {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    const name = form.name.trim() || '访客'
+    const email = form.email.trim() || '未填写'
+    const subject = encodeURIComponent(`网站联系：${name}`)
+    const body = encodeURIComponent(`姓名：${name}\n邮箱：${email}\n\n${form.message.trim()}`)
+    window.location.href = `mailto:${SITE_CONTACT_EMAIL}?subject=${subject}&body=${body}`
     setSent(true)
   }
 
@@ -22,11 +27,11 @@ export default function ContactPage() {
 
       {sent ? (
         <div className="mt-10 border border-border bg-card px-5 py-6 text-sm text-muted-foreground">
-          <p className="text-foreground">感谢你的留言！</p>
+          <p className="text-foreground">已打开你的邮件客户端。</p>
           <p className="mt-2">
-            我会尽快通过邮箱
+            请确认收件人为
             <span className="mx-1 text-primary">{SITE_CONTACT_EMAIL}</span>
-            回复你。
+            后发送邮件；若未自动打开，可直接复制该地址联系我。
           </p>
           <button
             type="button"
