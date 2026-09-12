@@ -5,12 +5,10 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
+import { parseContent, type TocHeading } from '@/lib/toc'
 
-export interface TocHeading {
-  id: string
-  text: string
-  level: 2 | 3
-}
+// 目录结构类型定义在 lib/toc.ts（纯函数、可单测），这里转出去保持既有导入路径不变
+export type { TocHeading }
 
 export interface ContentWithTocProps {
   /** 文章正文；支持用 ## / ### 开头的行作为 h2/h3 标题，其它行按段落保留换行 */
@@ -18,24 +16,6 @@ export interface ContentWithTocProps {
   /** 当正文里解析出至少 1 个标题时回调；内容变化会重新计算（slug 切文章就变） */
   onHeadingsChange?: (headings: TocHeading[]) => void
   className?: string
-}
-
-/** 生成 URL 友好的 slug：中文/数字/字母保留，其余转 -，末尾去重 */
-function slugify(text: string, used: Set<string>): string {
-  let base = (text || '')
-    .trim()
-    .toLowerCase()
-    // 保留中文、字母、数字、下划线；其余替换为 -
-    .replace(/[^0-9a-z\u4e00-\u9fa5_]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  if (!base) base = 'section'
-  let candidate = base
-  let i = 2
-  while (used.has(candidate)) {
-    candidate = `${base}-${i++}`
-  }
-  used.add(candidate)
-  return candidate
 }
 
 /**
@@ -46,6 +26,18 @@ function slugify(text: string, used: Set<string>): string {
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const preRef = useRef<HTMLPreElement>(null)
   const [feedback, setFeedback] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const feedbackTimerRef = useRef<number | null>(null)
+
+  // 组件卸载（切文章 / 切页签）时清掉待触发的复位定时器，
+  // 否则它会在组件消失后调用 setFeedback
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current)
+        feedbackTimerRef.current = null
+      }
+    }
+  }, [])
 
   const onCopy = useCallback(async () => {
     const pre = preRef.current
@@ -73,7 +65,12 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
       }
     }
     setFeedback(ok ? 'copied' : 'failed')
-    window.setTimeout(() => setFeedback('idle'), 2000)
+    // 连续点击时先清掉上一次的定时器，否则旧定时器会提前把新提示复位
+    if (feedbackTimerRef.current !== null) window.clearTimeout(feedbackTimerRef.current)
+    feedbackTimerRef.current = window.setTimeout(() => {
+      feedbackTimerRef.current = null
+      setFeedback('idle')
+    }, 2000)
   }, [])
 
   const label =
@@ -169,55 +166,12 @@ const markdownComponents: Components = {
 }
 
 export function ContentWithToc({ content, onHeadingsChange, className }: ContentWithTocProps) {
-  const { blocks, headings } = useMemo(() => {
-    const lines = (content ?? '').split(/\r?\n/)
-    const used = new Set<string>()
-    const hList: TocHeading[] = []
-    const pBlocks: Array<
-      | { kind: 'p'; lines: string[] }
-      | { kind: 'h'; level: 2 | 3; id: string; text: string }
-    > = []
-    let paraBuffer: string[] = []
-
-    const flushPara = () => {
-      if (paraBuffer.length === 0) return
-      pBlocks.push({ kind: 'p', lines: [...paraBuffer] })
-      paraBuffer = []
-    }
-
-    for (const raw of lines) {
-      const line = raw.replace(/\s+$/g, '')
-      const h2 = /^##\s+(.+)$/.exec(line)
-      const h3 = /^###\s+(.+)$/.exec(line)
-      if (h2) {
-        flushPara()
-        const text = h2[1].trim()
-        const id = slugify(text, used)
-        hList.push({ id, text, level: 2 })
-        pBlocks.push({ kind: 'h', level: 2, id, text })
-      } else if (h3) {
-        flushPara()
-        const text = h3[1].trim()
-        const id = slugify(text, used)
-        hList.push({ id, text, level: 3 })
-        pBlocks.push({ kind: 'h', level: 3, id, text })
-      } else {
-        paraBuffer.push(line)
-      }
-    }
-    flushPara()
-    return { blocks: pBlocks, headings: hList }
-  }, [content])
+  // 解析逻辑（含围栏代码块处理）在 lib/toc.ts，纯函数、可单测
+  const { blocks, headings } = useMemo(() => parseContent(content), [content])
 
   // 通知父组件 TOC 更新
-  const firstRun = useRef(true)
   useEffect(() => {
     onHeadingsChange?.(headings)
-    firstRun.current = false
-    return () => {
-      // 卸载：清空（切另一篇文章的中间态防残留）
-      if (firstRun.current) return
-    }
   }, [headings, onHeadingsChange])
 
   return (

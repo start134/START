@@ -3,7 +3,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
-import { withFileLock } from '@/lib/storage'
+import { withFileLock, writeFileAtomic } from '@/lib/storage'
+import { ONE_DAY_MS, formatSiteDate, todayInSiteTZ } from '@/lib/site'
 
 const log = createLogger('kv-stats')
 
@@ -13,21 +14,14 @@ const LOCAL_FILE = process.env.VERCEL
   : path.join(process.cwd(), 'data', 'stats.json')
 const STATS_LOCK_KEY = 'stats.json'
 
+// 按站点时区（UTC+8）取日期，不能用 getFullYear() 这类本地 getter：
+// 部署到 UTC 服务器后，北京时间 00:00–08:00 的阅读量会被记到前一天的分桶里。
 function today(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}.${m}.${day}`
+  return todayInSiteTZ()
 }
 
 function getDateNDaysAgo(n: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}.${m}.${day}`
+  return formatSiteDate(new Date(Date.now() - n * ONE_DAY_MS))
 }
 
 type StatsData = {
@@ -37,27 +31,77 @@ type StatsData = {
   bySlug?: Record<string, Record<string, number>>
 }
 
+/** 磁盘上的原始结构（daily 是数组，内存里会归一化成 Record） */
+type RawStatsFile = {
+  daily?: { date: string; views: number }[]
+  totalViews?: number
+  bySlug?: Record<string, Record<string, number>>
+}
+
 /** 单篇统计保留窗口（与 stats API 的 90 天上限一致） */
 const BY_SLUG_RETENTION_DAYS = 90
 
-async function loadLocalStats(): Promise<StatsData> {
+/** 把磁盘结构归一化成内存结构，同时丢掉脏条目，避免 NaN 混进后续的累加 */
+function normalizeStats(data: RawStatsFile): StatsData {
+  const daily: Record<string, number> = {}
+  for (const entry of data.daily ?? []) {
+    if (!entry || typeof entry.date !== 'string' || !Number.isFinite(entry.views)) continue
+    daily[entry.date] = entry.views
+  }
+  return {
+    daily,
+    total: Number.isFinite(data.totalViews) ? (data.totalViews as number) : 0,
+    bySlug: data.bySlug ?? {},
+  }
+}
+
+/**
+ * 把损坏的统计文件改名隔离，而不是直接删掉。
+ *
+ * 为什么需要这一步：损坏文件如果原地留着，每次读写都会失败，系统就永久卡死；
+ * 直接删除又会丢掉人工抢救的可能。改名成 .corrupt-<时间戳>.bak 既让后续请求能正常
+ * 走"全新站点"的分支继续服务，又把原始字节留在磁盘上可追查。
+ *
+ * 隔离本身失败不抛错（可能已被并发请求抢先隔离），由调用方继续抛业务错误。
+ */
+async function quarantineCorruptStats(): Promise<void> {
+  const backup = `${LOCAL_FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`
   try {
-    const raw = await fs.readFile(LOCAL_FILE, 'utf-8')
-    const data = JSON.parse(raw) as {
-      daily?: { date: string; views: number }[]
-      totalViews?: number
-      bySlug?: Record<string, Record<string, number>>
+    await fs.rename(LOCAL_FILE, backup)
+    log.error('统计文件损坏，已隔离备份', { from: LOCAL_FILE, to: backup })
+  } catch (err) {
+    log.error('统计文件损坏且隔离失败', { file: LOCAL_FILE, error: String(err) })
+  }
+}
+
+async function loadLocalStats(): Promise<StatsData> {
+  let raw: string
+  try {
+    raw = await fs.readFile(LOCAL_FILE, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      // 只有"文件确实不存在"才能安全地从零开始（全新站点 / 首次部署）
+      return { daily: {}, total: 0 }
     }
-    return {
-      daily: Object.fromEntries(
-        (data.daily ?? []).map((d) => [d.date, d.views])
-      ),
-      total: data.totalViews ?? 0,
-      bySlug: data.bySlug ?? {},
-    }
-  } catch {
-    // 文件不存在或损坏：从零开始（读取路径的容错降级）
-    return { daily: {}, total: 0 }
+    // 权限不足、目录异常等 IO 错误：绝不能伪装成空统计，否则会被下一次写回覆盖
+    log.error('读取统计文件失败', { file: LOCAL_FILE, error: String(err) })
+    throw err
+  }
+
+  try {
+    return normalizeStats(JSON.parse(raw) as RawStatsFile)
+  } catch (err) {
+    // 内容损坏必须抛错，不能返回空统计。
+    // incrementTodayViews 是"读全量 → 改 → 写回全量"：若此处把损坏当成空数据返回，
+    // 紧接着的 saveLocalStats 就会用"今日 1 次阅读"整体覆盖掉全部历史统计，
+    // 把"可修复的文件损坏"变成"历史数据不可逆丢失"。
+    // 这与 lib/storage.ts 里 readJSON 的取舍保持一致：宁可让请求失败，也不能静默毁数据。
+    await quarantineCorruptStats()
+    log.error('统计文件内容损坏，已中止本次读写以避免覆盖历史数据', {
+      file: LOCAL_FILE,
+      error: String(err),
+    })
+    throw new Error('统计文件 stats.json 内容损坏，已隔离备份')
   }
 }
 
@@ -72,7 +116,9 @@ async function saveLocalStats(stats: StatsData): Promise<void> {
   const daily = Object.entries(stats.daily).map(([date, views]) => ({ date, views }))
   if (stats.bySlug) pruneBySlug(stats.bySlug)
   await fs.mkdir(path.dirname(LOCAL_FILE), { recursive: true })
-  await fs.writeFile(
+  // 必须原子写（临时文件 + rename）：直接 fs.writeFile 会先截断再写入，
+  // 这中间任何一次并发读取（另一个请求的 getDailyStats）都会读到半截 JSON 而解析失败。
+  await writeFileAtomic(
     LOCAL_FILE,
     JSON.stringify(
       {
@@ -83,8 +129,7 @@ async function saveLocalStats(stats: StatsData): Promise<void> {
       },
       null,
       2
-    ),
-    'utf-8'
+    )
   )
 }
 

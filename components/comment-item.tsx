@@ -17,6 +17,11 @@ export function CommentItem({ comment, postSlug, onRefresh, isReply = false }: C
   const formatDate = (dateStr: string) => {
     try {
       const date = new Date(dateStr)
+      // new Date('乱码') 得到 Invalid Date，它的 getTime() 是 NaN，
+      // 下面所有大小比较对 NaN 恒为 false，会一路落到 toLocaleDateString()。
+      // 而 toLocaleDateString 对 Invalid Date 不抛异常，只会返回字符串 "Invalid Date"，
+      // 所以外层 try/catch 兜不住，必须在这里显式判掉。
+      if (Number.isNaN(date.getTime())) return dateStr
       const now = new Date()
       const diffMs = now.getTime() - date.getTime()
       const diffMins = Math.floor(diffMs / 60000)

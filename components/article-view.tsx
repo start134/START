@@ -67,11 +67,15 @@ export function ArticleView({
     } catch {
       // localStorage 故障：跳过去重，继续计数（不丢阅读量）
     }
-    incrementView(slug).then((views) => {
-      if (typeof views === 'number') {
-        setPost((prev) => (prev ? { ...prev, views } : prev))
-      }
-    })
+    incrementView(slug)
+      .then((views) => {
+        if (typeof views === 'number') setPost((prev) => ({ ...prev, views }))
+      })
+      .catch(() => {
+        // 计数是 fire-and-forget：必须吃掉 rejection。
+        // 离线时 fetch 会直接 reject，不接住就会抛到全局变成 unhandledrejection，
+        // 在控制台刷错误、也会污染全局错误上报。
+      })
   }, [slug])
 
   // 切文章时清掉残留 headings + 关折叠

@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createLogger } from '@/lib/logger'
 import { withFileLock, writeFileAtomic } from '@/lib/storage'
+import { SITE_UTC_OFFSET_MS, todayInSiteTZ } from '@/lib/site'
 import { readAllPosts } from '@/lib/posts-store'
 import { readAllComments } from '@/lib/comments-store'
 import { readAllNotifications } from '@/lib/notifications-store'
@@ -54,7 +55,11 @@ export async function createBackup(): Promise<string> {
 
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  // 文件名时间戳按站点时区（UTC+8）生成。
+  // 用本地 getter 的话，服务器时区一变（本地开发东八区 → 线上 UTC），
+  // 新旧文件名的时间基准就不同了，而下面的清理逻辑依赖文件名排序，会错乱。
+  const siteNow = new Date(now.getTime() + SITE_UTC_OFFSET_MS)
+  const stamp = `${siteNow.getUTCFullYear()}${pad(siteNow.getUTCMonth() + 1)}${pad(siteNow.getUTCDate())}-${pad(siteNow.getUTCHours())}${pad(siteNow.getUTCMinutes())}${pad(siteNow.getUTCSeconds())}`
   const filePath = path.join(BACKUP_DIR, `backup-${stamp}.json`)
   const payload: BackupPayload = {
     exportedAt: now.toISOString(),
@@ -87,7 +92,8 @@ export async function createBackup(): Promise<string> {
 
 /** 每天第一次有访问时触发一次备份；失败不抛出（备份是尽力而为） */
 export async function maybeRunDailyBackup(): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10)
+  // 去重键用站点时区：toISOString() 是 UTC，会让"每天一次"的分界线落在北京时间早上 8 点
+  const today = todayInSiteTZ()
   if (globalForBackup.__startLastBackupDay === today) return
   globalForBackup.__startLastBackupDay = today
   try {

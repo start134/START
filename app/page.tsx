@@ -4,14 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/components/use-auth'
 import { fetchPosts, type Post } from '@/lib/posts'
-
-function todayKeyCN(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = `${d.getMonth() + 1}`.padStart(2, '0')
-  const day = `${d.getDate()}`.padStart(2, '0')
-  return `${y}.${m}.${day}`
-}
+import { todayInSiteTZ } from '@/lib/site'
 
 export default function HomePage() {
   const [posts, setPosts] = useState<Post[]>([])
@@ -43,7 +36,10 @@ export default function HomePage() {
   // 日期依赖客户端时区，SSR(here: UTC) 与 hydration(浏览器时区) 可能不同。
   // 延迟到 mount 后再取值，保证 SSR 与首次客户端渲染一致，避免 hydration mismatch。
   useEffect(() => {
-    setToday(todayKeyCN())
+    // 用站点时区（UTC+8）而不是浏览器本地时区：
+    // 文章落款 p.date 是服务端按站点时区生成的，用访客本地时区比较，
+    // 海外访客（或跨时区出差时）会看到"今日新文"错位一天。
+    setToday(todayInSiteTZ())
   }, [])
 
   const { todays, rest } = useMemo(() => {

@@ -20,6 +20,11 @@ type EditorForm = {
   publishAt: string // datetime-local 格式；提交时转 ISO
 }
 
+/** 逐字段校验结果：键名对应下方各输入框，用于在字段下方就地显示错误 */
+type EditorErrors = Partial<
+  Record<'title' | 'category' | 'excerpt' | 'content' | 'tags' | 'publishAt', string>
+>
+
 const MAX_TITLE = 80
 const MAX_CATEGORY = 16
 const MAX_EXCERPT = 120
@@ -113,13 +118,15 @@ export function ArticleEditor({
   const [form, setForm] = useState<EditorForm>(initialForm)
   const [tab, setTab] = useState<'edit' | 'preview'>('edit')
   const [error, setError] = useState('')
-  const [errors, setErrors] = useState<Partial<Record<keyof EditorForm | 'tags' | 'publishAt', string>>>({})
+  const [errors, setErrors] = useState<EditorErrors>({})
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
 
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const submittedRef = useRef(false)
+  /** 已排队但尚未触发的自动保存定时器；提交成功时要主动取消它 */
+  const autosaveTimerRef = useRef<number | null>(null)
 
   // 已有分类/标签：datalist 建议（可自由输入，但优先选已有的，避免拼错产生重复分类）
   const [knownCategories, setKnownCategories] = useState<string[]>([])
@@ -194,13 +201,18 @@ export function ArticleEditor({
   useEffect(() => {
     if (submittedRef.current) return
     const id = window.setTimeout(() => {
+      autosaveTimerRef.current = null
       try {
         localStorage.setItem(draftKey, JSON.stringify({ form, savedAt: Date.now() }))
       } catch {
         // 配额满 / 隐私模式：自动保存不可用，静默
       }
     }, AUTOSAVE_DEBOUNCE_MS)
-    return () => window.clearTimeout(id)
+    autosaveTimerRef.current = id
+    return () => {
+      window.clearTimeout(id)
+      if (autosaveTimerRef.current === id) autosaveTimerRef.current = null
+    }
   }, [form, draftKey])
 
   const clearLocalDraft = useCallback(() => {
@@ -290,32 +302,48 @@ export function ArticleEditor({
 
   // ---- 校验 / 提交 ------------------------------------------------------
 
-  const validate = (): string | null => {
-    if (!form.title.trim()) return '请填写标题'
-    if (form.title.trim().length > MAX_TITLE) return '标题不超过 80 个字'
-    if (form.category.trim().length > MAX_CATEGORY) return '分类不超过 16 个字'
-    if (form.excerpt.trim().length > MAX_EXCERPT) return '摘要不超过 120 个字'
-    const { tags, error: tagErr } = parseTags(form.tags)
-    if (tagErr) return tagErr
+  const validate = (): EditorErrors => {
+    const next: EditorErrors = {}
+
+    const title = form.title.trim()
+    if (!title) next.title = '请填写标题'
+    else if (title.length > MAX_TITLE) next.title = `标题不超过 ${MAX_TITLE} 个字`
+
+    if (form.category.trim().length > MAX_CATEGORY) next.category = `分类不超过 ${MAX_CATEGORY} 个字`
+    if (form.excerpt.trim().length > MAX_EXCERPT) next.excerpt = `摘要不超过 ${MAX_EXCERPT} 个字`
+
+    const { error: tagErr } = parseTags(form.tags)
+    if (tagErr) next.tags = tagErr
+
     if (form.status !== 'draft') {
-      if (!form.content.trim()) return '请填写正文'
-      if (form.content.trim().length < 10) return '正文至少 10 个字'
+      const content = form.content.trim()
+      if (!content) next.content = '请填写正文'
+      else if (content.length < 10) next.content = '正文至少 10 个字'
     }
+
     if (form.status === 'scheduled') {
-      if (!form.publishAt) return '定时发布需要选择发布时间'
-      if (new Date(form.publishAt).getTime() <= Date.now()) return '发布时间必须是未来'
+      if (!form.publishAt) next.publishAt = '定时发布需要选择发布时间'
+      else if (new Date(form.publishAt).getTime() <= Date.now())
+        next.publishAt = '发布时间必须是未来'
     }
-    return null
+
+    return next
   }
 
   const submit = async () => {
     setError('')
-    const problem = validate()
-    if (problem) {
-      showToast('error', { title: problem })
-      setError(problem)
+    const problems = validate()
+    const firstKey = (Object.keys(problems) as (keyof EditorErrors)[])[0]
+    if (firstKey) {
+      // 一次性收集全部字段错误：输入框下方就地标红（errors），
+      // 同时用顶部错误行 + toast 给出总览，避免用户只看到一句提示却不知道改哪一项
+      const firstMessage = problems[firstKey]!
+      setErrors(problems)
+      setError(firstMessage)
+      showToast('error', { title: firstMessage })
       return
     }
+    setErrors({})
     setSubmitting(true)
     const { tags } = parseTags(form.tags)
     const payload = {
@@ -334,6 +362,14 @@ export function ArticleEditor({
     }
     try {
       submittedRef.current = true
+      // 取消"已排队但还没触发"的自动保存。
+      // 它是在上一次表单变更时排入的，若不取消会在下面 clearLocalDraft() 之后才执行，
+      // 把刚刚保存成功的内容重新写回 localStorage，下次进入编辑器就会误报
+      // "检测到未保存的本地草稿"（内容其实与服务端完全一致）。
+      if (autosaveTimerRef.current !== null) {
+        window.clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
       const saved =
         mode === 'edit' && slug
           ? await updatePost(slug, payload)

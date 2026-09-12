@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { createLogger } from '@/lib/logger'
 import { withFileLock, writeFileAtomic } from '@/lib/storage'
+import { formatSiteDate, todayInSiteTZ } from '@/lib/site'
 
 const log = createLogger('posts-store')
 
@@ -182,15 +183,15 @@ export async function readPost(slug: string): Promise<Post | undefined> {
   return found
 }
 
+// 文章落款日期统一按站点时区（UTC+8）计算。
+// 不能用 getFullYear() 这类本地 getter：本地开发在东八区看不出问题，
+// 但部署到 UTC 服务器（Vercel / Docker 默认）后，北京时间凌晨发布的文章会被记成前一天。
 function formatDateYMD(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}.${m}.${day}`
+  return formatSiteDate(d)
 }
 
 function today(): string {
-  return formatDateYMD(new Date())
+  return todayInSiteTZ()
 }
 
 function estimateRead(content: string): string {
